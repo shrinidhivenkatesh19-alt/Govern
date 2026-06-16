@@ -4,7 +4,7 @@ import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import AIScoringPanel from "@/components/AIScoringPanel";
-import { CheckCircle2, AlertTriangle, ArrowUp, Bell, Send, ArrowLeft, Clock } from "lucide-react";
+import { CheckCircle2, AlertTriangle, ArrowUp, Bell, Send, ArrowLeft, Clock, Download, FileText, Image as ImageIcon, FileType } from "lucide-react";
 
 const statusLabels = {
     scored: "Scored",
@@ -115,6 +115,47 @@ export default function SubmissionDetail() {
                     <Section title="Content">
                         <pre className="whitespace-pre-wrap font-mono text-sm leading-relaxed">{item.content}</pre>
                     </Section>
+
+                    {item.attachments?.length > 0 && (
+                        <Section title={`Attachments (${item.attachments.length})`}>
+                            <ul className="space-y-2" data-testid="attachments-list">
+                                {item.attachments.map((a) => {
+                                    const ext = a.original_filename.split(".").pop()?.toLowerCase();
+                                    const Icon = ["png", "jpg", "jpeg", "gif", "webp"].includes(ext) ? ImageIcon : ext === "pdf" ? FileType : FileText;
+                                    const token = localStorage.getItem("caa_token");
+                                    const downloadUrl = `${process.env.REACT_APP_BACKEND_URL}/api/files/${a.id}/download?auth=${token}`;
+                                    return (
+                                        <li key={a.id} className="flex items-center gap-3 px-3 py-2 border border-border" data-testid={`attachment-${a.id}`}>
+                                            <Icon className="w-4 h-4 text-[#002FA7] shrink-0" strokeWidth={1.75} />
+                                            <div className="flex-1 min-w-0">
+                                                <a
+                                                    href={downloadUrl}
+                                                    target="_blank"
+                                                    rel="noopener noreferrer"
+                                                    className="text-sm font-medium hover:text-[#002FA7] truncate block"
+                                                    data-testid={`attachment-link-${a.id}`}
+                                                >
+                                                    {a.original_filename}
+                                                </a>
+                                                <div className="text-xs text-muted-foreground font-mono">
+                                                    {a.size < 1024 ? `${a.size} B` : a.size < 1024 * 1024 ? `${Math.round(a.size / 1024)} KB` : `${(a.size / 1024 / 1024).toFixed(1)} MB`}
+                                                </div>
+                                            </div>
+                                            <a
+                                                href={downloadUrl}
+                                                target="_blank"
+                                                rel="noopener noreferrer"
+                                                className="p-2 hover:bg-[#0A0A0A] hover:text-white transition-colors"
+                                                data-testid={`download-${a.id}`}
+                                            >
+                                                <Download className="w-3.5 h-3.5" />
+                                            </a>
+                                        </li>
+                                    );
+                                })}
+                            </ul>
+                        </Section>
+                    )}
 
                     <Section title="Activity">
                         <ol className="space-y-4" data-testid="activity-timeline">

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Header, Query, Response
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -10,6 +10,7 @@ import re
 import uuid
 import bcrypt
 import jwt
+import requests
 from pathlib import Path
 from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
@@ -28,6 +29,61 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = os.environ.get("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 EMERGENT_LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
+
+# Object storage
+STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
+APP_NAME = "govern-approval"
+storage_key: Optional[str] = None
+
+MIME_TYPES = {
+    "pdf": "application/pdf",
+    "ppt": "application/vnd.ms-powerpoint",
+    "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "doc": "application/msword",
+    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "xls": "application/vnd.ms-excel",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "gif": "image/gif",
+    "webp": "image/webp",
+    "txt": "text/plain",
+    "csv": "text/csv",
+    "md": "text/markdown",
+}
+ALLOWED_EXT = set(MIME_TYPES.keys())
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB
+
+
+def init_storage() -> str:
+    global storage_key
+    if storage_key:
+        return storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
+    resp.raise_for_status()
+    storage_key = resp.json()["storage_key"]
+    return storage_key
+
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data,
+        timeout=120,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_object(path: str) -> tuple:
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
 
 app = FastAPI(title="Content Approval Agent")
 api_router = APIRouter(prefix="/api")
@@ -108,6 +164,14 @@ class ScoreResult(BaseModel):
     questions_to_resolve: List[str]
 
 
+class Attachment(BaseModel):
+    id: str
+    original_filename: str
+    content_type: str
+    size: int
+    storage_path: str
+
+
 class SubmissionCreate(BaseModel):
     title: str
     content_type: ContentType
@@ -116,6 +180,7 @@ class SubmissionCreate(BaseModel):
     deadline: str  # ISO date
     score_result: ScoreResult
     chosen_tier: Tier  # may differ from recommended (human override)
+    attachments: List[Attachment] = Field(default_factory=list)
 
 
 class ActionIn(BaseModel):
@@ -279,6 +344,7 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
         "stage_entered_at": now,
         "stage_durations": {},  # status -> seconds spent
         "activity": activity,
+        "attachments": [a.model_dump() for a in body.attachments],
     }
     await db.submissions.insert_one(doc)
     doc.pop("_id", None)
@@ -459,6 +525,91 @@ async def analytics(user: dict = Depends(get_current_user)):
         "bottleneck_reviewers": {k: round(v, 1) for k, v in bottleneck_reviewers.items()},
         "completed_count": len(completed),
     }
+
+
+@api_router.post("/upload")
+async def upload_file(file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    filename = file.filename or "file"
+    ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    if ext not in ALLOWED_EXT:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type .{ext}. Allowed: {sorted(ALLOWED_EXT)}")
+
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail=f"File too large (max {MAX_UPLOAD_BYTES // (1024*1024)}MB)")
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty file")
+
+    file_id = str(uuid.uuid4())
+    path = f"{APP_NAME}/uploads/{user['id']}/{file_id}.{ext}"
+    content_type = file.content_type or MIME_TYPES.get(ext, "application/octet-stream")
+
+    try:
+        result = put_object(path, data, content_type)
+    except requests.RequestException as e:
+        logger.error(f"Storage upload failed: {e}")
+        raise HTTPException(status_code=502, detail="File storage upload failed")
+
+    doc = {
+        "id": file_id,
+        "storage_path": result["path"],
+        "original_filename": filename,
+        "content_type": content_type,
+        "size": result.get("size", len(data)),
+        "uploader_id": user["id"],
+        "is_deleted": False,
+        "created_at": now_iso(),
+    }
+    await db.files.insert_one(doc)
+    return {
+        "id": file_id,
+        "original_filename": filename,
+        "content_type": content_type,
+        "size": doc["size"],
+        "storage_path": result["path"],
+    }
+
+
+@api_router.get("/files/{file_id}/download")
+async def download_file(file_id: str, authorization: Optional[str] = Header(None), auth: Optional[str] = Query(None)):
+    token = None
+    if authorization and authorization.lower().startswith("bearer "):
+        token = authorization.split(" ", 1)[1]
+    elif auth:
+        token = auth
+    if not token:
+        raise HTTPException(status_code=401, detail="Auth required")
+    try:
+        jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    record = await db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
+    if not record:
+        raise HTTPException(status_code=404, detail="File not found")
+    try:
+        data, ct = get_object(record["storage_path"])
+    except requests.RequestException as e:
+        logger.error(f"Storage download failed: {e}")
+        raise HTTPException(status_code=502, detail="File download failed")
+
+    return Response(
+        content=data,
+        media_type=record.get("content_type", ct),
+        headers={
+            "Content-Disposition": f'inline; filename="{record["original_filename"]}"',
+            "Cache-Control": "private, max-age=3600",
+        },
+    )
+
+
+@app.on_event("startup")
+async def on_startup():
+    try:
+        init_storage()
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error(f"Storage init failed at startup: {e}")
 
 
 @api_router.get("/")

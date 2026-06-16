@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { toast } from "sonner";
 import AIScoringPanel from "@/components/AIScoringPanel";
+import FileUploader from "@/components/FileUploader";
 import { Sparkles, Send, RotateCcw } from "lucide-react";
 
 const contentTypes = [
@@ -31,6 +32,7 @@ export default function NewSubmission() {
         content: "",
         deadline: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
     });
+    const [attachments, setAttachments] = useState([]);
     const [scoring, setScoring] = useState(false);
     const [result, setResult] = useState(null);
     const [chosenTier, setChosenTier] = useState(null);
@@ -73,6 +75,7 @@ export default function NewSubmission() {
                 ...form,
                 score_result: result,
                 chosen_tier: chosenTier,
+                attachments,
             });
             toast.success("Submission entered the chain");
             navigate(`/app/submission/${r.data.id}`);
@@ -85,6 +88,7 @@ export default function NewSubmission() {
 
     const reset = () => {
         setForm({ title: "", content_type: "social_post", brief: "", content: "", deadline: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0] });
+        setAttachments([]);
         setResult(null);
         setChosenTier(null);
     };
@@ -162,6 +166,8 @@ export default function NewSubmission() {
                                 className="w-full px-3 py-2.5 border border-border focus:outline-none focus:ring-2 focus:ring-[#002FA7] resize-none font-mono text-sm"
                             />
                         </Field>
+
+                        <FileUploader value={attachments} onChange={setAttachments} />
 
                         <div className="flex gap-3 pt-2">
                             <button
