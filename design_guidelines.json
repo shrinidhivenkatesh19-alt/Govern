@@ -1,0 +1,108 @@
+{
+  "theme": "light",
+  "archetype": "Archetype 4 (Swiss & High-Contrast)",
+  "emotional_tone": "Objective, rigid, authoritative, and functional. Focuses on clarity and truth to eliminate bottlenecks.",
+  "typography": {
+    "anti_patterns": ["Inter", "Roboto", "Open Sans", "Lato", "Syne"],
+    "headings": {
+      "fontFamily": "Outfit, sans-serif",
+      "weights": ["light", "black", "bold"],
+      "tracking": "tracking-tight",
+      "h1_max": "text-5xl",
+      "usage": "Use Outfit for all display and heading text."
+    },
+    "body": {
+      "fontFamily": "IBM Plex Sans, sans-serif",
+      "weights": ["regular", "medium", "semibold"],
+      "usage": "Use IBM Plex Sans for all dense data, tables, and standard copy."
+    },
+    "labels": {
+      "case": "uppercase",
+      "size": "text-xs",
+      "tracking": "tracking-[0.2em]",
+      "usage": "Overlines, table headers, and tiny meta-data."
+    }
+  },
+  "colors": {
+    "philosophy": "Color is Function Only. 95% of the UI should be monochrome. Color exists only to guide action.",
+    "base": {
+      "background": "#FFFFFF",
+      "foreground": "#0A0A0A",
+      "muted": "#F3F4F6",
+      "muted_foreground": "#4B5563",
+      "border": "#E5E7EB"
+    },
+    "functional": {
+      "primary": "#002FA7",
+      "primary_foreground": "#FFFFFF",
+      "destructive": "#FF2400",
+      "destructive_foreground": "#FFFFFF",
+      "warning": "#FFD700",
+      "warning_foreground": "#0A0A0A",
+      "success": "#16A34A",
+      "success_foreground": "#FFFFFF"
+    },
+    "specific_usage": {
+      "ceo_escalation": "#FF2400",
+      "nudge_48h": "#FFD700",
+      "routine_action": "#002FA7",
+      "ai_scoring_panel_bg": "#0A0A0A",
+      "ai_scoring_panel_text": "#FFFFFF"
+    }
+  },
+  "spacing_and_layout": {
+    "philosophy": "Dense and compact spacing for data clarity. The 'Control Room' grid protocol.",
+    "container_padding": "p-6 to p-8",
+    "grid_gaps": "gap-4 to gap-6",
+    "borders": "Expose the skeleton. Grid items should have border-r and border-b where applicable to create a technical table-like structure.",
+    "surfaces": "Flat solid surfaces. NEVER use Glassmorphism for this app. Use crisp 1px borders to separate sections."
+  },
+  "components": {
+    "cards": "Flat background, 1px subtle border (border-border), no shadow by default. On hover: slight lift (-translate-y-1) and shadow-sm.",
+    "buttons": "Sharp edges (rounded-sm or rounded-none). High contrast. Primary actions use #002FA7, Escalations use #FF2400.",
+    "tables": "Dense rows, monochrome headers, strict left-alignment. Explicit bottom borders per row.",
+    "badges": "Square or slightly rounded (rounded-sm). Strict functional coloring (Red = CEO, Blue = Product, Green = Auto-Approve).",
+    "navigation": "Visible sidebar or top navigation with a hard bottom/right border. Solid background. Do not hide behind hamburger on desktop."
+  },
+  "interactions": {
+    "hover": "Explicitly set hover:text-white or contrasting color. E.g., hover:bg-slate-900 hover:text-white.",
+    "focus": "High contrast ring: focus:ring-2 focus:ring-[#002FA7] focus:ring-offset-1 focus:outline-none.",
+    "transitions": "Use specific properties: transition: transform 0.2s ease, opacity 0.2s ease, background-color 0.2s ease."
+  },
+  "icons": {
+    "library": "lucide-react",
+    "style": "Minimalist, stroke-width 1.5 or 2."
+  },
+  "image_urls": [
+    {
+      "url": "https://images.unsplash.com/photo-1607503873903-c5e95f80d7b9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHw0fHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MTUwOTA5Mnww&ixlib=rb-4.1.0&q=85",
+      "description": "Avatar for Reviewer / Approver",
+      "category": "avatars"
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1494790108377-be9c29b29330?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwzfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MTUwOTA5Mnww&ixlib=rb-4.1.0&q=85",
+      "description": "Avatar for CEO",
+      "category": "avatars"
+    },
+    {
+      "url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjAzNTl8MHwxfHNlYXJjaHwxfHxwcm9mZXNzaW9uYWwlMjBoZWFkc2hvdCUyMHBvcnRyYWl0fGVufDB8fHx8MTc4MTUwOTA5Mnww&ixlib=rb-4.1.0&q=85",
+      "description": "Avatar for Submitter / Marketing Rep",
+      "category": "avatars"
+    }
+  ],
+  "testing": {
+    "required_attributes": "All interactive and key informational elements MUST include `data-testid` attribute (kebab-case, role-based). e.g., data-testid='approve-submission-button'"
+  },
+  "instructions_to_main_agent": [
+    "Install Google fonts 'Outfit' and 'IBM Plex Sans' via Google Fonts link in index.html or import in CSS.",
+    "Update tailwind.config.js to set font-sans to Outfit and font-mono or a custom class to IBM Plex Sans.",
+    "Implement the 'Control Room' grid layout for the Governance Analytics dashboard (tight gaps, high density).",
+    "Use a strict high-contrast Swiss Brutalist UI: heavily rely on #FFFFFF backgrounds, #0A0A0A text, and 1px #E5E7EB borders. Customize Shadcn UI to have sharper corners (radius 0 or 0.25rem max).",
+    "Do NOT use 'Inter', 'Roboto', 'Open Sans', or 'Syne' fonts for headings.",
+    "Build the 'AI Scoring Panel' (Claude evaluation) visually distinct: give it a dark retro-terminal feel (bg: #0A0A0A, text: #FFFFFF, accents: #002FA7) to contrast with the stark white dashboard. This gives the 'Agent' a unique personality.",
+    "Implement a clear, visible sidebar or top navigation bar with a solid background and hard border. Provide role-based mock routing.",
+    "Use Lucide-react for all icons, maintaining a consistent stroke width.",
+    "Inject the provided avatar URLs directly into the User Profile/Reviewer elements.",
+    "Ensure the CEO Escalation flows utilize the Destructive (#FF2400) color scheme to highlight the trap."
+  ]
+}
