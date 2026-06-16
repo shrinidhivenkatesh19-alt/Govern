@@ -1,0 +1,44 @@
+{
+  "summary": "Iteration 2 backend testing complete — all 39 new tests passed (100%) covering: VP role login, timeline-required submission creation, tier routing (auto_approve->approved/system, product_only->pending_acceptance/reviewer, ceo_required->pending_acceptance/vp), notifications on assignment + accept + approve + live + scheduler nudges, /accept role gating + timeline override + stage_durations rollup + 400 on wrong status, /propose-timeline (submitter or reviewer; 403 unrelated), /agree-timeline (other party only; 403 self-agree; 400 no proposal), /forward-to-ceo (VP-only; reviewer/CEO get 403; routes to ceo+pending_acceptance), one-level /escalate (reviewer->marketing_lead, lead->vp, submitter/vp/ceo get 403), /approve now accepts vp, /mark-live requires approved (400 otherwise) + submitter notification, live annotations (timeline_overdue, any_overdue, deadline_progress, needs_nudge, needs_escalation) on list+get, GET /notifications shape {items, unread_count}, unread_only filter, /read single + /read-all, manual /scheduler/run produces auto_nudge_accept activity + reviewer-role notification, dedupes same-day repeats via auto_nudges_sent, auto_nudge_review activity after review_by past, auto_escalated activity at >=80% deadline progress with status=escalated and reviewer_role bumped one level.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/submissions/{id}/approve", "issue": "No status-machine guard — an item with status 'live' or 'revision_requested' can be re-approved. Recommend validating allowed source statuses (e.g., only in_progress/under_review/escalated)."},
+      {"endpoint": "POST /api/submissions/{id}/request-revision", "issue": "Same — no source-status guard; can re-request from any status including 'live' or 'approved'."},
+      {"endpoint": "POST /api/submissions/{id}/forward-to-ceo", "issue": "When VP forwards, the assigned reviewer_role flips to 'ceo' but the previously seen 'assigned' notification to VP remains as historical; CEO receives 'forwarded_to_ceo' which is correct. No data bug, just noting that the submitter is NOT notified on forward — consider adding."},
+      {"endpoint": "POST /api/submissions/{id}/nudge", "issue": "No role check — any authenticated user can manually nudge (including unrelated users). Consider restricting to submitter, current reviewer_role, or admin roles."},
+      {"endpoint": "GET /api/submissions", "issue": "Still no scoping — submitter sees ALL submissions across the org. Same observation as iteration 1; confirm intentional."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration2_features.py",
+    "/app/backend/tests/test_content_approval.py",
+    "/app/test_reports/pytest/iteration2_results.xml"
+  ],
+  "action_items": [
+    "(Optional) Add state-machine guards on /approve and /request-revision so transitions only happen from valid source statuses.",
+    "(Optional) Restrict /nudge to submitter or current reviewer_role.",
+    "(Optional) Notify submitter when VP forwards to CEO.",
+    "(Optional) Consider scoping GET /submissions for submitter role (privacy)."
+  ],
+  "critical_code_review_comments": [
+    "server.py has grown to 1061 lines — exceeds 700-line threshold. Split into routers (auth, score, submissions, notifications, scheduler, files) and a services/ layer for SLA logic, _annotate, _transition.",
+    "_annotate and run_sla_check both re-implement deadline_progress calculation — extract shared helper to avoid drift.",
+    "run_sla_check's inline `async def fire(...)` closure captures activity_additions correctly, but mixing sync mutation with async notify_role calls inside a per-item loop could be cleaner as an explicit helper returning the activity entries.",
+    "next_role_map in /escalate is duplicated in run_sla_check's auto-escalation block — DRY violation; centralize role-escalation policy.",
+    "auto_nudges_sent dedupe uses string date keys but never expires/rotates — long-running submissions accumulate keys; consider TTL or prune on stage transitions.",
+    "datetime.fromisoformat is used on stored ISO strings without try/except in /accept, /escalate, /forward-to-ceo — a corrupted record would 500. _annotate at least has a try block; the transition endpoints don't.",
+    "/auth/me returns the full user dict (including created_at) but list_users also exposes created_at — fine, just confirm intentional.",
+    "Pagination still absent on /submissions (to_list(1000)) and /notifications (to_list(100)); fine for MVP but watch for scale.",
+    "JWT_SECRET default in .env is a placeholder; rotate for prod.",
+    "extract_json's greedy `\\{.*\\}` regex still risky for nested LLM output noise — consider Anthropic 'JSON mode' or stricter brace-matching."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration2_features.py"],
+  "success_rate": {"backend": "100% (39/39 iteration-2 + 22/22 iteration-1)", "frontend": "n/a"},
+  "test_credentials": "submitter@govern.app / reviewer@govern.app / lead@govern.app / vp@govern.app / ceo@govern.app — all Pass1234! (verified working; auto-registered if missing)",
+  "seed_data_creation": "Created ~14 new TEST_IT2_-prefixed submissions covering all flows (TEST_IT2_AutoApprove, TEST_IT2_ProductOnly, TEST_IT2_CEOReq, TEST_IT2_VPApprove, TEST_IT2_EscRev, TEST_IT2_EscLead, TEST_IT2_EscVP, TEST_IT2_EscCEO, TEST_IT2_EscSubmitter, TEST_IT2_SchedAccept, TEST_IT2_SchedDedupe, TEST_IT2_SchedReview, TEST_IT2_SchedEscalate). Several have past-dated timelines for SLA testing; left in place since _annotate handles them gracefully and they add useful analytics data.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Backend is 100% green across both iterations (61/61 total). Iteration 1 tests at test_content_approval.py and iteration 2 tests at test_iteration2_features.py — both should be kept as regression. The /scheduler/run endpoint is the deterministic way to test SLAs; use _past(N) helper to create overdue timelines. Notifications collection accumulates — if a future test asserts exact counts, filter by submission_id."
+}

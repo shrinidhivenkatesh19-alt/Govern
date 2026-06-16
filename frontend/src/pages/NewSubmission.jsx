@@ -4,6 +4,7 @@ import { api } from "@/lib/api";
 import { toast } from "sonner";
 import AIScoringPanel from "@/components/AIScoringPanel";
 import FileUploader from "@/components/FileUploader";
+import TimelineEditor from "@/components/TimelineEditor";
 import { Sparkles, Send, RotateCcw } from "lucide-react";
 
 const contentTypes = [
@@ -30,7 +31,12 @@ export default function NewSubmission() {
         content_type: "social_post",
         brief: "",
         content: "",
-        deadline: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
+        deadline: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0],
+    });
+    const [timeline, setTimeline] = useState({
+        accept_by: new Date(Date.now() + 2 * 86400000).toISOString().split("T")[0],
+        review_by: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
+        approve_by: new Date(Date.now() + 12 * 86400000).toISOString().split("T")[0],
     });
     const [attachments, setAttachments] = useState([]);
     const [scoring, setScoring] = useState(false);
@@ -76,6 +82,7 @@ export default function NewSubmission() {
                 score_result: result,
                 chosen_tier: chosenTier,
                 attachments,
+                timeline,
             });
             toast.success("Submission entered the chain");
             navigate(`/app/submission/${r.data.id}`);
@@ -87,7 +94,12 @@ export default function NewSubmission() {
     };
 
     const reset = () => {
-        setForm({ title: "", content_type: "social_post", brief: "", content: "", deadline: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0] });
+        setForm({ title: "", content_type: "social_post", brief: "", content: "", deadline: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0] });
+        setTimeline({
+            accept_by: new Date(Date.now() + 2 * 86400000).toISOString().split("T")[0],
+            review_by: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
+            approve_by: new Date(Date.now() + 12 * 86400000).toISOString().split("T")[0],
+        });
         setAttachments([]);
         setResult(null);
         setChosenTier(null);
@@ -168,6 +180,14 @@ export default function NewSubmission() {
                         </Field>
 
                         <FileUploader value={attachments} onChange={setAttachments} />
+
+                        <div>
+                            <div className="label-overline mb-2">Proposed timeline (reviewer can negotiate at acceptance)</div>
+                            <TimelineEditor value={timeline} onChange={setTimeline} />
+                            <p className="text-xs text-muted-foreground mt-2">
+                                Auto-nudges fire when these dates pass without action. Hard escalation kicks in at 80% of created→deadline elapsed.
+                            </p>
+                        </div>
 
                         <div className="flex gap-3 pt-2">
                             <button

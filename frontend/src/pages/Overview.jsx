@@ -6,6 +6,8 @@ import { AlertTriangle, Clock, CheckCircle2, ArrowRight, Activity } from "lucide
 
 const statusLabels = {
     scored: "Scored",
+    pending_acceptance: "Awaiting Accept",
+    in_progress: "In Progress",
     under_review: "Under Review",
     approved: "Approved",
     revision_requested: "Revision",
@@ -16,6 +18,8 @@ const statusLabels = {
 const statusColor = (s) =>
     ({
         scored: "bg-[#F3F4F6] text-[#0A0A0A]",
+        pending_acceptance: "bg-[#FFD700] text-[#0A0A0A]",
+        in_progress: "bg-[#002FA7] text-white",
         under_review: "bg-[#002FA7] text-white",
         approved: "bg-[#16A34A] text-white",
         revision_requested: "bg-[#FFD700] text-[#0A0A0A]",
@@ -54,7 +58,7 @@ export default function Overview() {
 
             <div className="grid grid-cols-2 lg:grid-cols-4 border border-border mb-10">
                 <KPI label="In Pipeline" value={stats?.total ?? "—"} testid="kpi-total" />
-                <KPI label="Awaiting Review" value={stats?.by_status?.under_review ?? 0} accent="#002FA7" testid="kpi-under-review" />
+                <KPI label="Awaiting Accept" value={stats?.by_status?.pending_acceptance ?? 0} accent="#FFD700" testid="kpi-pending" />
                 <KPI label="Escalated" value={stats?.by_status?.escalated ?? 0} accent="#FF2400" testid="kpi-escalated" />
                 <KPI label="Avg Approval (hrs)" value={stats?.avg_approval_hours ?? 0} testid="kpi-avg-hours" />
             </div>

@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
+import asyncio
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 
 ROOT_DIR = Path(__file__).parent
@@ -128,10 +129,16 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(securit
 
 
 # ---------- Models ----------
-Role = Literal["submitter", "reviewer", "marketing_lead", "ceo"]
-SubmissionStatus = Literal["scored", "under_review", "approved", "revision_requested", "escalated", "live"]
+Role = Literal["submitter", "reviewer", "marketing_lead", "vp", "ceo"]
+SubmissionStatus = Literal["scored", "pending_acceptance", "in_progress", "under_review", "approved", "revision_requested", "escalated", "live"]
 ContentType = Literal["social_post", "blog_article", "email_campaign", "press_release", "product_announcement", "partnership", "pricing_update", "ad_creative"]
 Tier = Literal["auto_approve", "product_only", "ceo_required"]
+
+
+class Timeline(BaseModel):
+    accept_by: str  # ISO date — reviewer must accept by this
+    review_by: str  # ISO date — review/decision by this
+    approve_by: str  # ISO date — final approval by this
 
 
 class RegisterIn(BaseModel):
@@ -181,6 +188,19 @@ class SubmissionCreate(BaseModel):
     score_result: ScoreResult
     chosen_tier: Tier  # may differ from recommended (human override)
     attachments: List[Attachment] = Field(default_factory=list)
+    timeline: Timeline
+
+
+class TimelineProposal(BaseModel):
+    accept_by: str
+    review_by: str
+    approve_by: str
+    note: Optional[str] = ""
+
+
+class AcceptIn(BaseModel):
+    note: Optional[str] = ""
+    timeline: Optional[Timeline] = None  # reviewer may propose updated timeline at acceptance
 
 
 class ActionIn(BaseModel):
@@ -302,26 +322,50 @@ Return JSON with keys: brand_alignment_score, completeness_score, content_classi
         raise HTTPException(status_code=502, detail=f"Scoring failed: {e}")
 
 
+# ---------- Notifications helper ----------
+async def create_notification(user_id: str, submission_id: str, kind: str, title: str, body: str):
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "submission_id": submission_id,
+        "kind": kind,  # e.g. "nudge_accept", "nudge_review", "escalation", "assigned", "approved", "revision"
+        "title": title,
+        "body": body,
+        "read": False,
+        "created_at": now_iso(),
+    }
+    await db.notifications.insert_one(doc)
+
+
+async def notify_role(role: str, submission_id: str, kind: str, title: str, body: str, exclude_user_id: Optional[str] = None):
+    users = await db.users.find({"role": role}).to_list(200)
+    for u in users:
+        if exclude_user_id and u["id"] == exclude_user_id:
+            continue
+        await create_notification(u["id"], submission_id, kind, title, body)
+
+
 # ---------- Submissions ----------
-def tier_to_status(tier: Tier) -> SubmissionStatus:
+def initial_status_for_tier(tier: Tier) -> SubmissionStatus:
     if tier == "auto_approve":
         return "approved"
-    return "under_review"
+    return "pending_acceptance"
 
 
-def tier_to_reviewer_role(tier: Tier) -> str:
-    return {"auto_approve": "system", "product_only": "reviewer", "ceo_required": "ceo"}[tier]
+def reviewer_role_for_tier(tier: Tier) -> str:
+    # CEO-required items funnel through VPs first — team members cannot push to CEO
+    return {"auto_approve": "system", "product_only": "reviewer", "ceo_required": "vp"}[tier]
 
 
 @api_router.post("/submissions")
 async def create_submission(body: SubmissionCreate, user: dict = Depends(get_current_user)):
     sub_id = str(uuid.uuid4())
-    status_val = tier_to_status(body.chosen_tier)
-    reviewer_role = tier_to_reviewer_role(body.chosen_tier)
+    status_val = initial_status_for_tier(body.chosen_tier)
+    reviewer_role = reviewer_role_for_tier(body.chosen_tier)
     now = now_iso()
 
     activity = [
-        {"ts": now, "actor": user["name"], "actor_role": user["role"], "action": "submitted", "note": f"Submitted as {body.chosen_tier}"},
+        {"ts": now, "actor": user["name"], "actor_role": user["role"], "action": "submitted", "note": f"Submitted as {body.chosen_tier}; timeline proposed"},
     ]
     if status_val == "approved":
         activity.append({"ts": now, "actor": "Agent", "actor_role": "system", "action": "auto_approved", "note": "Routine content, auto-approved by agent"})
@@ -342,13 +386,62 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
         "created_at": now,
         "updated_at": now,
         "stage_entered_at": now,
-        "stage_durations": {},  # status -> seconds spent
+        "stage_durations": {},
         "activity": activity,
         "attachments": [a.model_dump() for a in body.attachments],
+        "timeline": body.timeline.model_dump(),
+        "timeline_agreed": False,  # reviewer hasn't agreed yet
     }
     await db.submissions.insert_one(doc)
+
+    # Notify reviewers of the assigned role
+    if status_val == "pending_acceptance":
+        await notify_role(
+            reviewer_role,
+            sub_id,
+            "assigned",
+            f"New submission needs acceptance: {body.title}",
+            f"From {user['name']} · accept by {body.timeline.accept_by}",
+        )
+
     doc.pop("_id", None)
     return doc
+
+
+def _annotate(item: dict) -> dict:
+    """Compute live SLA / idle / timeline-breach flags on a submission."""
+    now = datetime.now(timezone.utc)
+    entered = datetime.fromisoformat(item["stage_entered_at"])
+    item["idle_hours"] = round((now - entered).total_seconds() / 3600, 1)
+    item["idle_days"] = round(item["idle_hours"] / 24, 2)
+
+    tl = item.get("timeline") or {}
+    today = now.date().isoformat()
+
+    overdue = {}
+    if tl:
+        try:
+            overdue["accept"] = item["status"] == "pending_acceptance" and tl.get("accept_by") and today > tl["accept_by"]
+            overdue["review"] = item["status"] == "in_progress" and tl.get("review_by") and today > tl["review_by"]
+            overdue["approve"] = item["status"] in ("in_progress", "pending_acceptance", "under_review", "escalated") and tl.get("approve_by") and today > tl["approve_by"]
+        except Exception:
+            overdue = {}
+    item["timeline_overdue"] = overdue
+    item["any_overdue"] = bool(overdue.get("accept") or overdue.get("review") or overdue.get("approve"))
+
+    # Hard escalation when >= 80% of created→deadline elapsed without final decision
+    try:
+        created = datetime.fromisoformat(item["created_at"])
+        deadline_dt = datetime.fromisoformat(item["deadline"] + "T23:59:59+00:00") if "T" not in item["deadline"] else datetime.fromisoformat(item["deadline"])
+        total = (deadline_dt - created).total_seconds()
+        elapsed = (now - created).total_seconds()
+        item["deadline_progress"] = round(min(max(elapsed / total, 0), 1), 3) if total > 0 else 1.0
+    except Exception:
+        item["deadline_progress"] = 0.0
+
+    item["needs_nudge"] = item["any_overdue"] and item["status"] in ("pending_acceptance", "in_progress", "under_review", "escalated")
+    item["needs_escalation"] = item["deadline_progress"] >= 0.8 and item["status"] in ("pending_acceptance", "in_progress", "under_review")
+    return item
 
 
 @api_router.get("/submissions")
@@ -357,15 +450,7 @@ async def list_submissions(user: dict = Depends(get_current_user), status_filter
     if status_filter:
         query["status"] = status_filter
     items = await db.submissions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    # Compute idle days
-    now = datetime.now(timezone.utc)
-    for it in items:
-        entered = datetime.fromisoformat(it["stage_entered_at"])
-        it["idle_hours"] = round((now - entered).total_seconds() / 3600, 1)
-        it["idle_days"] = round(it["idle_hours"] / 24, 2)
-        it["needs_nudge"] = it["idle_hours"] >= 48 and it["status"] in ("under_review", "escalated")
-        it["needs_escalation"] = it["idle_hours"] >= 72 and it["status"] == "under_review"
-    return items
+    return [_annotate(it) for it in items]
 
 
 @api_router.get("/submissions/{sub_id}")
@@ -373,11 +458,7 @@ async def get_submission(sub_id: str, user: dict = Depends(get_current_user)):
     item = await db.submissions.find_one({"id": sub_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="Submission not found")
-    now = datetime.now(timezone.utc)
-    entered = datetime.fromisoformat(item["stage_entered_at"])
-    item["idle_hours"] = round((now - entered).total_seconds() / 3600, 1)
-    item["idle_days"] = round(item["idle_hours"] / 24, 2)
-    return item
+    return _annotate(item)
 
 
 async def _transition(sub_id: str, new_status: SubmissionStatus, actor: dict, action: str, note: str):
@@ -410,28 +491,244 @@ async def _transition(sub_id: str, new_status: SubmissionStatus, actor: dict, ac
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
+@api_router.post("/submissions/{sub_id}/accept")
+async def accept_assignment(sub_id: str, body: AcceptIn, user: dict = Depends(get_current_user)):
+    """Reviewer (or VP for ceo_required) accepts the assignment, optionally proposing updated timeline."""
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] != "pending_acceptance":
+        raise HTTPException(status_code=400, detail=f"Cannot accept from status '{item['status']}'")
+    if user["role"] != item["reviewer_role"]:
+        raise HTTPException(status_code=403, detail=f"Only {item['reviewer_role']} can accept this")
+
+    set_fields = {}
+    note = body.note or "Assignment accepted"
+    if body.timeline:
+        set_fields["timeline"] = body.timeline.model_dump()
+        set_fields["timeline_agreed"] = True
+        note += f" · timeline updated"
+    else:
+        set_fields["timeline_agreed"] = True
+
+    activity_entry = {
+        "ts": now_iso(),
+        "actor": user["name"],
+        "actor_role": user["role"],
+        "action": "accepted",
+        "note": note,
+    }
+    activity = item.get("activity", []) + [activity_entry]
+    set_fields.update({
+        "status": "in_progress",
+        "stage_entered_at": now_iso(),
+        "activity": activity,
+        "updated_at": now_iso(),
+        "accepted_at": now_iso(),
+    })
+    # Roll up time spent in pending_acceptance
+    elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
+    durations = item.get("stage_durations", {}) or {}
+    durations[item["status"]] = durations.get(item["status"], 0) + elapsed
+    set_fields["stage_durations"] = durations
+
+    await db.submissions.update_one({"id": sub_id}, {"$set": set_fields})
+    await create_notification(
+        item["submitter_id"], sub_id, "accepted",
+        f"{user['name']} accepted '{item['title']}'",
+        "Review is now in progress.",
+    )
+    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+
+
+@api_router.post("/submissions/{sub_id}/propose-timeline")
+async def propose_timeline(sub_id: str, body: TimelineProposal, user: dict = Depends(get_current_user)):
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    is_submitter = user["id"] == item["submitter_id"]
+    is_reviewer = user["role"] == item["reviewer_role"]
+    if not (is_submitter or is_reviewer):
+        raise HTTPException(status_code=403, detail="Only submitter or assigned reviewer can propose timeline")
+
+    proposal = {
+        "accept_by": body.accept_by,
+        "review_by": body.review_by,
+        "approve_by": body.approve_by,
+        "proposed_by": user["id"],
+        "proposed_by_name": user["name"],
+        "proposed_by_role": user["role"],
+        "proposed_at": now_iso(),
+        "note": body.note or "",
+    }
+    activity_entry = {
+        "ts": now_iso(),
+        "actor": user["name"],
+        "actor_role": user["role"],
+        "action": "timeline_proposed",
+        "note": body.note or "New timeline proposed",
+    }
+    activity = item.get("activity", []) + [activity_entry]
+    await db.submissions.update_one(
+        {"id": sub_id},
+        {"$set": {
+            "pending_timeline_proposal": proposal,
+            "activity": activity,
+            "updated_at": now_iso(),
+        }},
+    )
+    # Notify the other party
+    other_user_id = item["submitter_id"] if is_reviewer else None
+    other_role = item["reviewer_role"] if is_submitter else None
+    if other_user_id:
+        await create_notification(other_user_id, sub_id, "timeline_proposed", f"Timeline change proposed for '{item['title']}'", f"By {user['name']}")
+    if other_role:
+        await notify_role(other_role, sub_id, "timeline_proposed", f"Timeline change proposed for '{item['title']}'", f"By {user['name']}")
+    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+
+
+@api_router.post("/submissions/{sub_id}/agree-timeline")
+async def agree_timeline(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    proposal = item.get("pending_timeline_proposal")
+    if not proposal:
+        raise HTTPException(status_code=400, detail="No pending timeline proposal")
+    is_submitter = user["id"] == item["submitter_id"]
+    is_reviewer = user["role"] == item["reviewer_role"]
+    # The one who didn't propose must agree
+    if proposal["proposed_by"] == user["id"] or not (is_submitter or is_reviewer):
+        raise HTTPException(status_code=403, detail="Other party must agree to the proposal")
+
+    new_timeline = {"accept_by": proposal["accept_by"], "review_by": proposal["review_by"], "approve_by": proposal["approve_by"]}
+    activity_entry = {
+        "ts": now_iso(),
+        "actor": user["name"],
+        "actor_role": user["role"],
+        "action": "timeline_agreed",
+        "note": body.note or "Agreed to new timeline",
+    }
+    activity = item.get("activity", []) + [activity_entry]
+    await db.submissions.update_one(
+        {"id": sub_id},
+        {"$set": {"timeline": new_timeline, "timeline_agreed": True, "activity": activity, "updated_at": now_iso()},
+         "$unset": {"pending_timeline_proposal": ""}},
+    )
+    await create_notification(
+        proposal["proposed_by"], sub_id, "timeline_agreed",
+        f"Timeline accepted for '{item['title']}'",
+        f"By {user['name']}",
+    )
+    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+
+
+@api_router.post("/submissions/{sub_id}/forward-to-ceo")
+async def forward_to_ceo(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
+    """VP-only action: forward an in-progress submission to the CEO for final decision."""
+    if user["role"] != "vp":
+        raise HTTPException(status_code=403, detail="Only VPs can forward to CEO")
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] not in ("in_progress", "pending_acceptance"):
+        raise HTTPException(status_code=400, detail="Can only forward in_progress or pending submissions")
+
+    activity_entry = {
+        "ts": now_iso(),
+        "actor": user["name"],
+        "actor_role": user["role"],
+        "action": "forwarded_to_ceo",
+        "note": body.note or "Forwarded to CEO by VP",
+    }
+    elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
+    durations = item.get("stage_durations", {}) or {}
+    durations[item["status"]] = durations.get(item["status"], 0) + elapsed
+
+    await db.submissions.update_one(
+        {"id": sub_id},
+        {"$set": {
+            "reviewer_role": "ceo",
+            "status": "pending_acceptance",
+            "stage_entered_at": now_iso(),
+            "stage_durations": durations,
+            "activity": item.get("activity", []) + [activity_entry],
+            "updated_at": now_iso(),
+        }},
+    )
+    await notify_role("ceo", sub_id, "forwarded_to_ceo", f"Submission forwarded to you: {item['title']}", f"From VP {user['name']}")
+    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+
+
 @api_router.post("/submissions/{sub_id}/approve")
 async def approve(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
-    if user["role"] not in ("reviewer", "marketing_lead", "ceo"):
+    if user["role"] not in ("reviewer", "marketing_lead", "vp", "ceo"):
         raise HTTPException(status_code=403, detail="Not authorized to approve")
-    return await _transition(sub_id, "approved", user, "approved", body.note or "")
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    result = await _transition(sub_id, "approved", user, "approved", body.note or "")
+    await create_notification(item["submitter_id"], sub_id, "approved", f"'{item['title']}' approved", f"By {user['name']}")
+    return result
 
 
 @api_router.post("/submissions/{sub_id}/request-revision")
 async def request_revision(sub_id: str, body: RevisionIn, user: dict = Depends(get_current_user)):
-    if user["role"] not in ("reviewer", "marketing_lead", "ceo"):
+    if user["role"] not in ("reviewer", "marketing_lead", "vp", "ceo"):
         raise HTTPException(status_code=403, detail="Not authorized")
-    return await _transition(sub_id, "revision_requested", user, "requested_revision", body.note)
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    result = await _transition(sub_id, "revision_requested", user, "requested_revision", body.note)
+    await create_notification(item["submitter_id"], sub_id, "revision", f"Revision requested on '{item['title']}'", body.note)
+    return result
 
 
 @api_router.post("/submissions/{sub_id}/escalate")
 async def escalate(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
-    return await _transition(sub_id, "escalated", user, "escalated", body.note or "Escalated to CEO")
+    """Escalate one level up. Team members → marketing_lead, marketing_lead → vp. Cannot directly escalate to CEO except via /forward-to-ceo (VP only)."""
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    next_role_map = {"reviewer": "marketing_lead", "marketing_lead": "vp"}
+    if user["role"] not in next_role_map:
+        raise HTTPException(status_code=403, detail="This role cannot escalate further (use forward-to-ceo if VP)")
+    new_role = next_role_map[user["role"]]
+    elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
+    durations = item.get("stage_durations", {}) or {}
+    durations[item["status"]] = durations.get(item["status"], 0) + elapsed
+    activity_entry = {
+        "ts": now_iso(),
+        "actor": user["name"],
+        "actor_role": user["role"],
+        "action": "escalated",
+        "note": body.note or f"Escalated to {new_role}",
+    }
+    await db.submissions.update_one(
+        {"id": sub_id},
+        {"$set": {
+            "status": "escalated",
+            "reviewer_role": new_role,
+            "stage_entered_at": now_iso(),
+            "stage_durations": durations,
+            "activity": item.get("activity", []) + [activity_entry],
+            "updated_at": now_iso(),
+        }},
+    )
+    await notify_role(new_role, sub_id, "escalation", f"Escalated to you: {item['title']}", f"From {user['name']}")
+    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
 @api_router.post("/submissions/{sub_id}/mark-live")
 async def mark_live(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
-    return await _transition(sub_id, "live", user, "marked_live", body.note or "Published live")
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] != "approved":
+        raise HTTPException(status_code=400, detail="Can only mark approved items as live")
+    result = await _transition(sub_id, "live", user, "marked_live", body.note or "Published live")
+    await create_notification(item["submitter_id"], sub_id, "live", f"'{item['title']}' is live", "")
+    return result
 
 
 @api_router.post("/submissions/{sub_id}/nudge")
@@ -448,7 +745,31 @@ async def nudge(sub_id: str, body: ActionIn, user: dict = Depends(get_current_us
         "note": body.note or "Reviewer nudged",
     })
     await db.submissions.update_one({"id": sub_id}, {"$set": {"activity": activity, "updated_at": now_iso()}})
+    await notify_role(item["reviewer_role"], sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+
+
+# ---------- Notifications API ----------
+@api_router.get("/notifications")
+async def list_notifications(user: dict = Depends(get_current_user), unread_only: bool = False):
+    query = {"user_id": user["id"]}
+    if unread_only:
+        query["read"] = False
+    items = await db.notifications.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    unread = await db.notifications.count_documents({"user_id": user["id"], "read": False})
+    return {"items": items, "unread_count": unread}
+
+
+@api_router.post("/notifications/{nid}/read")
+async def mark_notification_read(nid: str, user: dict = Depends(get_current_user)):
+    await db.notifications.update_one({"id": nid, "user_id": user["id"]}, {"$set": {"read": True}})
+    return {"ok": True}
+
+
+@api_router.post("/notifications/read-all")
+async def mark_all_read(user: dict = Depends(get_current_user)):
+    await db.notifications.update_many({"user_id": user["id"], "read": False}, {"$set": {"read": True}})
+    return {"ok": True}
 
 
 # ---------- Analytics ----------
@@ -610,6 +931,112 @@ async def on_startup():
         logger.info("Object storage initialized")
     except Exception as e:
         logger.error(f"Storage init failed at startup: {e}")
+    # Start SLA scheduler
+    asyncio.create_task(sla_scheduler_loop())
+    logger.info("SLA scheduler task scheduled")
+
+
+async def sla_scheduler_loop():
+    """Every 15 min, scan open submissions, fire nudge notifications when SLAs breach,
+    and auto-escalate when 80%+ of created→deadline elapsed without a decision."""
+    interval = int(os.environ.get("SLA_INTERVAL_SECONDS", "900"))
+    await asyncio.sleep(20)  # let app warm up first
+    while True:
+        try:
+            await run_sla_check()
+        except Exception as e:
+            logger.error(f"SLA loop error: {e}")
+        await asyncio.sleep(interval)
+
+
+async def run_sla_check():
+    open_statuses = ["pending_acceptance", "in_progress", "under_review", "escalated"]
+    items = await db.submissions.find({"status": {"$in": open_statuses}}).to_list(2000)
+    now = datetime.now(timezone.utc)
+    today = now.date().isoformat()
+
+    for item in items:
+        sub_id = item["id"]
+        tl = item.get("timeline") or {}
+        last_nudges = item.get("auto_nudges_sent", {}) or {}
+        new_nudges = dict(last_nudges)
+        activity_additions = []
+
+        async def fire(kind: str, msg: str):
+            await notify_role(item["reviewer_role"], sub_id, kind, f"SLA breach: {item['title']}", msg)
+            activity_additions.append({
+                "ts": now_iso(),
+                "actor": "Agent",
+                "actor_role": "system",
+                "action": kind,
+                "note": msg,
+            })
+
+        # Accept SLA breach
+        if item["status"] == "pending_acceptance" and tl.get("accept_by") and today > tl["accept_by"]:
+            if last_nudges.get("accept") != today:
+                await fire("auto_nudge_accept", f"Past accept-by date ({tl['accept_by']}). Reviewer has not accepted.")
+                new_nudges["accept"] = today
+
+        # Review SLA breach
+        if item["status"] == "in_progress" and tl.get("review_by") and today > tl["review_by"]:
+            if last_nudges.get("review") != today:
+                await fire("auto_nudge_review", f"Past review-by date ({tl['review_by']}). Decision pending.")
+                new_nudges["review"] = today
+
+        # Hard escalation when ≥80% of created→deadline elapsed without final decision
+        try:
+            created = datetime.fromisoformat(item["created_at"])
+            deadline_str = item.get("deadline", "")
+            deadline_dt = datetime.fromisoformat(deadline_str + "T23:59:59+00:00") if "T" not in deadline_str else datetime.fromisoformat(deadline_str)
+            total = (deadline_dt - created).total_seconds()
+            elapsed = (now - created).total_seconds()
+            progress = elapsed / total if total > 0 else 1.0
+        except Exception:
+            progress = 0.0
+
+        if progress >= 0.8 and item["status"] in ("pending_acceptance", "in_progress", "under_review"):
+            if not last_nudges.get("hard_escalation"):
+                next_role_map = {"reviewer": "marketing_lead", "marketing_lead": "vp", "vp": "vp", "ceo": "ceo"}
+                current_role = item["reviewer_role"]
+                new_role = next_role_map.get(current_role, current_role)
+                elapsed_secs = (now - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
+                durations = item.get("stage_durations", {}) or {}
+                durations[item["status"]] = durations.get(item["status"], 0) + elapsed_secs
+                activity_additions.append({
+                    "ts": now_iso(),
+                    "actor": "Agent",
+                    "actor_role": "system",
+                    "action": "auto_escalated",
+                    "note": f"≥80% of timeline elapsed without decision; routed from {current_role} to {new_role}",
+                })
+                if new_role != current_role:
+                    await notify_role(new_role, sub_id, "auto_escalation", f"Auto-escalated: {item['title']}", f"Reached deadline threshold; previously with {current_role}")
+                    await db.submissions.update_one(
+                        {"id": sub_id},
+                        {"$set": {
+                            "status": "escalated",
+                            "reviewer_role": new_role,
+                            "stage_entered_at": now_iso(),
+                            "stage_durations": durations,
+                            "updated_at": now_iso(),
+                        }},
+                    )
+                new_nudges["hard_escalation"] = today
+
+        if activity_additions or new_nudges != last_nudges:
+            full_activity = item.get("activity", []) + activity_additions
+            await db.submissions.update_one(
+                {"id": sub_id},
+                {"$set": {"activity": full_activity, "auto_nudges_sent": new_nudges, "updated_at": now_iso()}},
+            )
+
+
+@api_router.post("/scheduler/run")
+async def manual_run_scheduler(user: dict = Depends(get_current_user)):
+    """Manually trigger the SLA scan (useful for testing / admin)."""
+    await run_sla_check()
+    return {"ok": True}
 
 
 @api_router.get("/")

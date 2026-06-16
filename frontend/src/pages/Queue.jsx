@@ -5,6 +5,8 @@ import { Inbox, AlertTriangle, Clock } from "lucide-react";
 
 const statusLabels = {
     scored: "Scored",
+    pending_acceptance: "Awaiting Accept",
+    in_progress: "In Progress",
     under_review: "Under Review",
     approved: "Approved",
     revision_requested: "Revision",
@@ -15,6 +17,8 @@ const statusLabels = {
 const statusColor = (s) =>
     ({
         scored: "bg-[#F3F4F6] text-[#0A0A0A]",
+        pending_acceptance: "bg-[#FFD700] text-[#0A0A0A]",
+        in_progress: "bg-[#002FA7] text-white",
         under_review: "bg-[#002FA7] text-white",
         approved: "bg-[#16A34A] text-white",
         revision_requested: "bg-[#FFD700] text-[#0A0A0A]",
@@ -27,7 +31,8 @@ const tierColor = (t) =>
 
 const filters = [
     { value: "all", label: "All" },
-    { value: "under_review", label: "Under Review" },
+    { value: "pending_acceptance", label: "Awaiting Accept" },
+    { value: "in_progress", label: "In Progress" },
     { value: "escalated", label: "Escalated" },
     { value: "approved", label: "Approved" },
     { value: "live", label: "Live" },

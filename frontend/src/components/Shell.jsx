@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { LayoutDashboard, FilePlus2, Inbox, BarChart3, LogOut, ShieldCheck } from "lucide-react";
+import NotificationBell from "@/components/NotificationBell";
 
 const navItems = [
     { to: "/app", label: "Overview", icon: LayoutDashboard, end: true, testid: "nav-overview" },
@@ -13,6 +14,7 @@ const roleLabel = {
     submitter: "Submitter",
     reviewer: "Reviewer · Product",
     marketing_lead: "Marketing Lead",
+    vp: "Vice President",
     ceo: "CEO",
 };
 
@@ -83,6 +85,9 @@ export default function Shell() {
             </aside>
 
             <main className="flex-1 overflow-auto" data-testid="main-content">
+                <div className="flex justify-end px-6 py-3 border-b border-border bg-white sticky top-0 z-40" data-testid="topbar">
+                    <NotificationBell />
+                </div>
                 <Outlet />
             </main>
         </div>

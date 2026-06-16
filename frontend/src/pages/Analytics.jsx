@@ -5,6 +5,8 @@ import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, PieChart, Pie, 
 const tierColor = { auto_approve: "#16A34A", product_only: "#002FA7", ceo_required: "#FF2400" };
 const statusColor = {
     scored: "#9CA3AF",
+    pending_acceptance: "#FFD700",
+    in_progress: "#002FA7",
     under_review: "#002FA7",
     approved: "#16A34A",
     revision_requested: "#FFD700",

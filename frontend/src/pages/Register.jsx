@@ -8,6 +8,7 @@ const roles = [
     { value: "submitter", label: "Submitter", desc: "Marketing rep submitting briefs" },
     { value: "reviewer", label: "Reviewer", desc: "Product team approver" },
     { value: "marketing_lead", label: "Marketing Lead", desc: "Escalation handler" },
+    { value: "vp", label: "Vice President", desc: "Forwards CEO-bound items" },
     { value: "ceo", label: "CEO", desc: "Final tier — innovation & risk" },
 ];
 
