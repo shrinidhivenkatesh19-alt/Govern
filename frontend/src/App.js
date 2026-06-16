@@ -1,56 +1,71 @@
-import { useEffect } from "react";
 import "@/App.css";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
-import axios from "axios";
-import { HOME } from "@/constants/testIds";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider, useAuth } from "@/lib/auth";
+import { Toaster } from "@/components/ui/sonner";
 
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
+import Login from "@/pages/Login";
+import Register from "@/pages/Register";
+import Shell from "@/components/Shell";
+import Overview from "@/pages/Overview";
+import NewSubmission from "@/pages/NewSubmission";
+import Queue from "@/pages/Queue";
+import SubmissionDetail from "@/pages/SubmissionDetail";
+import Analytics from "@/pages/Analytics";
 
-const Home = () => {
-  const helloWorldApi = async () => {
-    try {
-      const response = await axios.get(`${API}/`);
-      console.log(response.data.message);
-    } catch (e) {
-      console.error(e, `errored out requesting / api`);
-    }
-  };
-
-  useEffect(() => {
-    helloWorldApi();
-  }, []);
-
-  return (
-    <div>
-      <header className="App-header">
-        <a
-          data-testid={HOME.emergentLink}
-          className="App-link"
-          href="https://emergent.sh"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <img src="https://avatars.githubusercontent.com/in/1201222?s=120&u=2686cf91179bbafbc7a71bfbc43004cf9ae1acea&v=4" />
-        </a>
-        <p className="mt-5">Building something incredible ~!</p>
-      </header>
-    </div>
-  );
-};
-
-function App() {
-  return (
-    <div className="App">
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Home />}>
-            <Route index element={<Home />} />
-          </Route>
-        </Routes>
-      </BrowserRouter>
-    </div>
-  );
+function Protected({ children }) {
+    const { user, loading } = useAuth();
+    if (loading) return <div className="p-10 text-sm text-muted-foreground">Loading...</div>;
+    if (!user) return <Navigate to="/login" replace />;
+    return children;
 }
 
-export default App;
+function PublicOnly({ children }) {
+    const { user, loading } = useAuth();
+    if (loading) return <div className="p-10 text-sm text-muted-foreground">Loading...</div>;
+    if (user) return <Navigate to="/app" replace />;
+    return children;
+}
+
+export default function App() {
+    return (
+        <BrowserRouter>
+            <AuthProvider>
+                <Routes>
+                    <Route path="/" element={<Navigate to="/app" replace />} />
+                    <Route
+                        path="/login"
+                        element={
+                            <PublicOnly>
+                                <Login />
+                            </PublicOnly>
+                        }
+                    />
+                    <Route
+                        path="/register"
+                        element={
+                            <PublicOnly>
+                                <Register />
+                            </PublicOnly>
+                        }
+                    />
+                    <Route
+                        path="/app"
+                        element={
+                            <Protected>
+                                <Shell />
+                            </Protected>
+                        }
+                    >
+                        <Route index element={<Overview />} />
+                        <Route path="submit" element={<NewSubmission />} />
+                        <Route path="queue" element={<Queue />} />
+                        <Route path="submission/:id" element={<SubmissionDetail />} />
+                        <Route path="analytics" element={<Analytics />} />
+                    </Route>
+                    <Route path="*" element={<Navigate to="/app" replace />} />
+                </Routes>
+                <Toaster position="top-right" />
+            </AuthProvider>
+        </BrowserRouter>
+    );
+}
