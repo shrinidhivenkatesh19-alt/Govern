@@ -189,6 +189,17 @@ export default function NewSubmission() {
                         <FileUploader value={attachments} onChange={setAttachments} />
 
                         <div>
+                            <UserPicker
+                                value={assignedUserId}
+                                onChange={setAssignedUserId}
+                                currentUserId={user?.id}
+                            />
+                            <p className="text-xs text-muted-foreground mt-2">
+                                Pick the person who should review this. (For auto-approve, this is ignored.)
+                            </p>
+                        </div>
+
+                        <div>
                             <div className="label-overline mb-2">Proposed timeline (reviewer can negotiate at acceptance)</div>
                             <TimelineEditor value={timeline} onChange={setTimeline} />
                             <p className="text-xs text-muted-foreground mt-2">
@@ -259,13 +270,9 @@ export default function NewSubmission() {
                                 })}
                             </div>
 
-                            {chosenTier && chosenTier !== "auto_approve" && (
-                                <div className="mb-5">
-                                    <UserPicker
-                                        value={assignedUserId}
-                                        onChange={setAssignedUserId}
-                                        currentUserId={user?.id}
-                                    />
+                            {chosenTier && chosenTier !== "auto_approve" && !assignedUserId && (
+                                <div className="mb-4 px-3 py-2 bg-[#FFD700] text-[#0A0A0A] text-xs">
+                                    Pick a reviewer in the brief panel before submitting.
                                 </div>
                             )}
 

@@ -724,9 +724,102 @@ async def approve(sub_id: str, body: ActionIn, user: dict = Depends(get_current_
         raise HTTPException(status_code=404, detail="Not found")
     if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
         raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can approve this")
-    result = await _transition(sub_id, "approved", user, "approved", body.note or "")
+    # Append to approval chain
+    chain = item.get("approval_chain", []) or []
+    chain.append({
+        "approver_id": user["id"],
+        "approver_name": user["name"],
+        "approver_role": user["role"],
+        "approver_designation": user.get("designation", ""),
+        "ts": now_iso(),
+        "note": body.note or "",
+        "closed": True,
+    })
+    await db.submissions.update_one({"id": sub_id}, {"$set": {"approval_chain": chain}})
+    result = await _transition(sub_id, "approved", user, "approved", body.note or "Approved and chain closed")
     await create_notification(item["submitter_id"], sub_id, "approved", f"'{item['title']}' approved", f"By {user['name']}")
     return result
+
+
+MAX_CHAIN_DEPTH = 10
+
+
+@api_router.post("/submissions/{sub_id}/approve-and-forward")
+async def approve_and_forward(sub_id: str, body: EscalateIn, user: dict = Depends(get_current_user)):
+    """Approve this step in the chain and forward to a specific next reviewer."""
+    if user["role"] not in ("reviewer", "marketing_lead", "vp", "ceo"):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if user["role"] == "ceo":
+        raise HTTPException(status_code=400, detail="CEO approval is terminal — use /approve instead")
+    if not body.assigned_user_id:
+        raise HTTPException(status_code=400, detail="assigned_user_id required to forward")
+    item = await db.submissions.find_one({"id": sub_id})
+    if not item:
+        raise HTTPException(status_code=404, detail="Not found")
+    if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
+        raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can act on this")
+    if item["status"] not in ("in_progress", "pending_acceptance", "escalated"):
+        raise HTTPException(status_code=400, detail=f"Cannot approve-and-forward from '{item['status']}'")
+
+    chain = item.get("approval_chain", []) or []
+    if len(chain) >= MAX_CHAIN_DEPTH:
+        raise HTTPException(status_code=400, detail=f"Approval chain depth limit reached ({MAX_CHAIN_DEPTH})")
+
+    target = await db.users.find_one({"id": body.assigned_user_id}, {"_id": 0, "password_hash": 0})
+    if not target:
+        raise HTTPException(status_code=400, detail="Target user not found")
+    if target["role"] == "submitter":
+        raise HTTPException(status_code=400, detail="Cannot forward to a submitter — pick a reviewer/lead/VP/CEO")
+    if target["id"] == user["id"]:
+        raise HTTPException(status_code=400, detail="Cannot forward to yourself")
+
+    # Record approval in chain
+    chain.append({
+        "approver_id": user["id"],
+        "approver_name": user["name"],
+        "approver_role": user["role"],
+        "approver_designation": user.get("designation", ""),
+        "ts": now_iso(),
+        "note": body.note or "",
+        "forwarded_to_id": target["id"],
+        "forwarded_to_name": target["name"],
+        "closed": False,
+    })
+
+    # Roll up time spent in current stage
+    elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
+    durations = item.get("stage_durations", {}) or {}
+    durations[item["status"]] = durations.get(item["status"], 0) + elapsed
+
+    activity = item.get("activity", []) + [{
+        "ts": now_iso(),
+        "actor": user["name"],
+        "actor_role": user["role"],
+        "action": "approved_and_forwarded",
+        "note": f"Approved → forwarded to {target['name']}" + (f" · {body.note}" if body.note else ""),
+    }]
+
+    await db.submissions.update_one(
+        {"id": sub_id},
+        {"$set": {
+            "approval_chain": chain,
+            "status": "pending_acceptance",
+            "reviewer_role": target["role"],
+            "assigned_user_id": target["id"],
+            "assigned_user_name": target["name"],
+            "assigned_user_email": target.get("email"),
+            "assigned_user_designation": target.get("designation", ""),
+            "assigned_user_team": target.get("team", ""),
+            "stage_entered_at": now_iso(),
+            "stage_durations": durations,
+            "activity": activity,
+            "timeline_agreed": False,
+            "updated_at": now_iso(),
+        }},
+    )
+    await create_notification(target["id"], sub_id, "assigned", f"Forwarded for your review: {item['title']}", f"From {user['name']}")
+    await create_notification(item["submitter_id"], sub_id, "approved", f"'{item['title']}' approved by {user['name']}", f"Forwarded to {target['name']} for next review")
+    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
 @api_router.post("/submissions/{sub_id}/request-revision")
@@ -867,8 +960,34 @@ async def mark_all_read(user: dict = Depends(get_current_user)):
 
 
 # ---------- Analytics ----------
+@api_router.get("/dashboard/stats")
+async def dashboard_stats(user: dict = Depends(get_current_user)):
+    """Lightweight stats available to all authenticated users for the Overview page."""
+    items = await db.submissions.find({}, {"_id": 0}).to_list(2000)
+    now = datetime.now(timezone.utc)
+    by_status = {}
+    completed = []
+    for it in items:
+        by_status[it["status"]] = by_status.get(it["status"], 0) + 1
+        if it["status"] in ("approved", "live"):
+            completed.append(it)
+    if completed:
+        secs = sum((datetime.fromisoformat(it["updated_at"]) - datetime.fromisoformat(it["created_at"])).total_seconds() for it in completed)
+        avg_approval_hours = round(secs / len(completed) / 3600, 2)
+    else:
+        avg_approval_hours = 0
+    return {
+        "total": len(items),
+        "by_status": by_status,
+        "avg_approval_hours": avg_approval_hours,
+        "completed_count": len(completed),
+    }
+
+
 @api_router.get("/analytics/overview")
 async def analytics(user: dict = Depends(get_current_user)):
+    if user["role"] not in ("vp", "ceo"):
+        raise HTTPException(status_code=403, detail="Governance analytics restricted to VP and CEO roles")
     items = await db.submissions.find({}, {"_id": 0}).to_list(2000)
     now = datetime.now(timezone.utc)
 

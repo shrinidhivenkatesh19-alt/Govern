@@ -5,6 +5,7 @@ import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import AIScoringPanel from "@/components/AIScoringPanel";
 import TimelineEditor from "@/components/TimelineEditor";
+import UserPicker from "@/components/UserPicker";
 import {
     CheckCircle2,
     AlertTriangle,
@@ -22,6 +23,7 @@ import {
     Pencil,
     X,
     ArrowRightCircle,
+    GitBranch,
 } from "lucide-react";
 
 const statusLabels = {
@@ -56,6 +58,8 @@ export default function SubmissionDetail() {
     const [acting, setActing] = useState(false);
     const [editingTimeline, setEditingTimeline] = useState(false);
     const [proposedTimeline, setProposedTimeline] = useState(null);
+    const [forwardMode, setForwardMode] = useState(false);
+    const [forwardUserId, setForwardUserId] = useState("");
 
     const load = async () => {
         try {
@@ -117,6 +121,26 @@ export default function SubmissionDetail() {
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Failed");
+        } finally {
+            setActing(false);
+        }
+    };
+
+    const submitForward = async () => {
+        if (!forwardUserId) {
+            toast.error("Pick the next reviewer");
+            return;
+        }
+        setActing(true);
+        try {
+            await api.post(`/submissions/${id}/approve-and-forward`, { note, assigned_user_id: forwardUserId });
+            toast.success("Approved and forwarded");
+            setForwardMode(false);
+            setForwardUserId("");
+            setNote("");
+            await load();
+        } catch (err) {
+            toast.error(err?.response?.data?.detail || "Forward failed");
         } finally {
             setActing(false);
         }
@@ -265,6 +289,40 @@ export default function SubmissionDetail() {
                         </Section>
                     )}
 
+                    {item.approval_chain?.length > 0 && (
+                        <Section title={`Approval chain (${item.approval_chain.length})`}>
+                            <ol className="space-y-3" data-testid="approval-chain">
+                                {item.approval_chain.map((step, i) => (
+                                    <li key={i} className="flex gap-3 items-start text-sm" data-testid={`chain-step-${i}`}>
+                                        <div className="w-7 h-7 bg-[#16A34A] text-white flex items-center justify-center font-display font-bold text-xs shrink-0">
+                                            {i + 1}
+                                        </div>
+                                        <div className="flex-1 border-l border-border pl-4 -ml-3">
+                                            <div className="font-medium">
+                                                {step.approver_name}{" "}
+                                                <span className="text-muted-foreground font-normal text-xs">
+                                                    · {step.approver_designation || step.approver_role}
+                                                </span>
+                                            </div>
+                                            {step.forwarded_to_name && (
+                                                <div className="text-xs text-[#002FA7] mt-1">
+                                                    → forwarded to {step.forwarded_to_name}
+                                                </div>
+                                            )}
+                                            {step.closed && (
+                                                <div className="text-xs text-[#16A34A] mt-1">→ chain closed</div>
+                                            )}
+                                            {step.note && <div className="text-xs text-muted-foreground mt-1 italic">"{step.note}"</div>}
+                                            <div className="text-[10px] text-muted-foreground font-mono mt-1 uppercase tracking-wider">
+                                                {new Date(step.ts).toLocaleString()}
+                                            </div>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ol>
+                        </Section>
+                    )}
+
                     <Section title="Activity">
                         <ol className="space-y-4" data-testid="activity-timeline">
                             {item.activity.map((a, i) => (
@@ -336,8 +394,31 @@ export default function SubmissionDetail() {
                                     data-testid="approve-btn"
                                     className="flex items-center justify-center gap-2 py-2.5 bg-[#16A34A] text-white hover:bg-[#0A0A0A] uppercase tracking-[0.18em] text-xs font-medium disabled:opacity-60"
                                 >
-                                    <CheckCircle2 className="w-4 h-4" /> Approve
+                                    <CheckCircle2 className="w-4 h-4" /> Approve & close
                                 </button>
+                                {user?.role !== "ceo" && (
+                                    <button
+                                        onClick={() => setForwardMode((v) => !v)}
+                                        disabled={acting}
+                                        data-testid="approve-forward-toggle-btn"
+                                        className="flex items-center justify-center gap-2 py-2.5 bg-[#002FA7] text-white hover:bg-[#0A0A0A] uppercase tracking-[0.18em] text-xs font-medium disabled:opacity-60"
+                                    >
+                                        <GitBranch className="w-4 h-4" /> {forwardMode ? "Cancel forward" : "Approve & forward to next"}
+                                    </button>
+                                )}
+                                {forwardMode && (
+                                    <div className="border border-[#002FA7] p-3 space-y-3" data-testid="forward-picker-block">
+                                        <UserPicker value={forwardUserId} onChange={setForwardUserId} currentUserId={user?.id} />
+                                        <button
+                                            onClick={submitForward}
+                                            disabled={acting || !forwardUserId}
+                                            data-testid="confirm-forward-btn"
+                                            className="w-full py-2.5 bg-[#002FA7] text-white hover:bg-[#0A0A0A] uppercase tracking-[0.18em] text-xs font-medium disabled:opacity-60"
+                                        >
+                                            Confirm — approve & send
+                                        </button>
+                                    </div>
+                                )}
                                 <button
                                     onClick={() => act("request-revision", {}, true)}
                                     disabled={acting}

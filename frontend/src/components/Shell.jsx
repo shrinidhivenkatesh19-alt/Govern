@@ -22,6 +22,9 @@ export default function Shell() {
     const { user, logout } = useAuth();
     const navigate = useNavigate();
 
+    const canViewGovernance = ["vp", "ceo"].includes(user?.role);
+    const visibleNav = navItems.filter((n) => n.to !== "/app/analytics" || canViewGovernance);
+
     const doLogout = () => {
         logout();
         navigate("/login");
@@ -43,7 +46,7 @@ export default function Shell() {
                 </div>
 
                 <nav className="flex-1 py-4">
-                    {navItems.map((item) => (
+                    {visibleNav.map((item) => (
                         <NavLink
                             key={item.to}
                             to={item.to}

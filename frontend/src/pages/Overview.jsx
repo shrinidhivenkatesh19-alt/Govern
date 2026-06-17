@@ -35,7 +35,7 @@ export default function Overview() {
 
     useEffect(() => {
         (async () => {
-            const [a, s] = await Promise.all([api.get("/analytics/overview"), api.get("/submissions")]);
+            const [a, s] = await Promise.all([api.get("/dashboard/stats"), api.get("/submissions")]);
             setStats(a.data);
             setItems(s.data);
             setLoading(false);

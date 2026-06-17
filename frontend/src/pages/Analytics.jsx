@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
+import { Navigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { BarChart, Bar, XAxis, YAxis, ResponsiveContainer, Cell, PieChart, Pie, Tooltip, CartesianGrid } from "recharts";
 
 const tierColor = { auto_approve: "#16A34A", product_only: "#002FA7", ceo_required: "#FF2400" };
@@ -15,11 +17,18 @@ const statusColor = {
 };
 
 export default function Analytics() {
+    const { user } = useAuth();
     const [data, setData] = useState(null);
 
     useEffect(() => {
-        api.get("/analytics/overview").then((r) => setData(r.data));
-    }, []);
+        if (user && ["vp", "ceo"].includes(user.role)) {
+            api.get("/analytics/overview").then((r) => setData(r.data)).catch(() => setData(null));
+        }
+    }, [user]);
+
+    if (user && !["vp", "ceo"].includes(user.role)) {
+        return <Navigate to="/app" replace />;
+    }
 
     if (!data)
         return (
