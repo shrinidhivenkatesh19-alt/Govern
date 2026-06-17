@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { AlertTriangle, Clock, CheckCircle2, ArrowRight, Activity } from "lucide-react";
+import { toast } from "sonner";
+import { AlertTriangle, Clock, CheckCircle2, ArrowRight, Activity, Bell, Loader2 } from "lucide-react";
 
 const statusLabels = {
     scored: "Scored",
@@ -32,19 +33,46 @@ export default function Overview() {
     const [stats, setStats] = useState(null);
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [nudging, setNudging] = useState(false);
+
+    const load = async () => {
+        const [a, s] = await Promise.all([api.get("/dashboard/stats"), api.get("/submissions")]);
+        setStats(a.data);
+        setItems(s.data);
+        setLoading(false);
+    };
 
     useEffect(() => {
-        (async () => {
-            const [a, s] = await Promise.all([api.get("/dashboard/stats"), api.get("/submissions")]);
-            setStats(a.data);
-            setItems(s.data);
-            setLoading(false);
-        })();
+        load();
     }, []);
 
     const nudges = items.filter((i) => i.needs_nudge && !i.needs_escalation);
     const escalations = items.filter((i) => i.needs_escalation);
     const recent = items.slice(0, 5);
+
+    const nudgeAll = async () => {
+        if (!nudges.length) return;
+        setNudging(true);
+        try {
+            const results = await Promise.allSettled(
+                nudges.map((it) =>
+                    api.post(`/submissions/${it.id}/nudge`, { note: "Bulk nudge from Control Room" }),
+                ),
+            );
+            const ok = results.filter((r) => r.status === "fulfilled").length;
+            const failed = results.length - ok;
+            if (failed === 0) {
+                toast.success(`Nudged ${ok} reviewer${ok === 1 ? "" : "s"}`);
+            } else {
+                toast.warning(`Nudged ${ok}, ${failed} failed`);
+            }
+            await load();
+        } catch (err) {
+            toast.error("Bulk nudge failed");
+        } finally {
+            setNudging(false);
+        }
+    };
 
     return (
         <div className="p-8 lg:p-10" data-testid="overview-page">
@@ -82,6 +110,17 @@ export default function Overview() {
                             title={`${nudges.length} item${nudges.length > 1 ? "s" : ""} past 48h — needs nudge`}
                             items={nudges.slice(0, 3)}
                             testid="alert-nudges"
+                            action={
+                                <button
+                                    onClick={nudgeAll}
+                                    disabled={nudging}
+                                    data-testid="nudge-all-btn"
+                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0A0A0A] text-white text-[10px] uppercase tracking-[0.18em] hover:bg-[#002FA7] transition-colors disabled:opacity-60"
+                                >
+                                    {nudging ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
+                                    {nudging ? "Nudging..." : `Nudge all (${nudges.length})`}
+                                </button>
+                            }
                         />
                     )}
                 </div>
@@ -93,9 +132,22 @@ export default function Overview() {
                         <div className="label-overline">Recent submissions</div>
                         <h3 className="font-display text-xl font-bold tracking-tight mt-1">Latest activity</h3>
                     </div>
-                    <Link to="/app/queue" className="text-sm flex items-center gap-1 hover:text-[#002FA7]" data-testid="view-all-link">
-                        View all <ArrowRight className="w-4 h-4" />
-                    </Link>
+                    <div className="flex items-center gap-3">
+                        {nudges.length > 0 && (
+                            <button
+                                onClick={nudgeAll}
+                                disabled={nudging}
+                                data-testid="nudge-all-table-btn"
+                                className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#FFD700] text-[#0A0A0A] text-xs uppercase tracking-[0.18em] font-medium hover:bg-[#0A0A0A] hover:text-white transition-colors disabled:opacity-60"
+                            >
+                                {nudging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bell className="w-3.5 h-3.5" />}
+                                {nudging ? "Nudging..." : `Nudge all past 48h (${nudges.length})`}
+                            </button>
+                        )}
+                        <Link to="/app/queue" className="text-sm flex items-center gap-1 hover:text-[#002FA7]" data-testid="view-all-link">
+                            View all <ArrowRight className="w-4 h-4" />
+                        </Link>
+                    </div>
                 </div>
 
                 {loading ? (
@@ -171,12 +223,15 @@ function KPI({ label, value, accent, testid }) {
     );
 }
 
-function AlertBox({ color, textColor = "#FFFFFF", icon: Icon, title, items, testid }) {
+function AlertBox({ color, textColor = "#FFFFFF", icon: Icon, title, items, testid, action }) {
     return (
         <div className="border" style={{ borderColor: color }} data-testid={testid}>
-            <div className="flex items-center gap-2 px-5 py-3" style={{ background: color, color: textColor }}>
-                <Icon className="w-4 h-4" strokeWidth={2.25} />
-                <span className="font-display font-bold tracking-tight">{title}</span>
+            <div className="flex items-center justify-between gap-3 px-5 py-3" style={{ background: color, color: textColor }}>
+                <div className="flex items-center gap-2 min-w-0">
+                    <Icon className="w-4 h-4 shrink-0" strokeWidth={2.25} />
+                    <span className="font-display font-bold tracking-tight truncate">{title}</span>
+                </div>
+                {action}
             </div>
             <div className="divide-y divide-border">
                 {items.map((it) => (
