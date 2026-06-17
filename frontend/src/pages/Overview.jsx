@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
-import { AlertTriangle, Clock, ArrowRight, Activity, Bell, Loader2 } from "lucide-react";
+import { AlertTriangle, Clock, ArrowRight, Activity, Bell, Loader2, GitBranch } from "lucide-react";
 
 const statusLabels = {
     scored: "Scored",
@@ -28,7 +28,14 @@ const statusColor = (s) =>
         live: "bg-[#0A0A0A] text-white",
     }[s] || "bg-[#F3F4F6]");
 
-const NUDGEABLE = new Set(["pending_acceptance", "in_progress", "under_review", "escalated"]);
+// Pick the SLA date that is currently being raced
+const currentSlaTarget = (it) => {
+    const tl = it.timeline || {};
+    if (it.status === "pending_acceptance") return { label: "Accept by", date: tl.accept_by, breached: it.timeline_overdue?.accept };
+    if (it.status === "in_progress") return { label: "Review by", date: tl.review_by, breached: it.timeline_overdue?.review };
+    if (it.status === "under_review" || it.status === "escalated") return { label: "Approve by", date: tl.approve_by, breached: it.timeline_overdue?.approve };
+    return { label: "Deadline", date: it.deadline };
+};
 
 export default function Overview() {
     const { user } = useAuth();
@@ -63,11 +70,8 @@ export default function Overview() {
             });
             const ok = r.data.nudged;
             const failed = r.data.failed?.length || 0;
-            if (failed === 0) {
-                toast.success(`Nudged ${ok} reviewer${ok === 1 ? "" : "s"}`);
-            } else {
-                toast.warning(`Nudged ${ok}, ${failed} skipped`);
-            }
+            if (failed === 0) toast.success(`Nudged ${ok} reviewer${ok === 1 ? "" : "s"}`);
+            else toast.warning(`Nudged ${ok}, ${failed} skipped`);
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Bulk nudge failed");
@@ -106,63 +110,29 @@ export default function Overview() {
                 <KPI label="Avg Approval (hrs)" value={stats?.avg_approval_hours ?? 0} testid="kpi-avg-hours" />
             </div>
 
-            {(nudges.length > 0 || escalations.length > 0) && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-10">
-                    {escalations.length > 0 && (
-                        <AlertBox
-                            color="#FF2400"
-                            icon={AlertTriangle}
-                            title={`${escalations.length} item${escalations.length > 1 ? "s" : ""} past 72h`}
-                            items={escalations.slice(0, 3)}
-                            testid="alert-escalations"
-                        />
-                    )}
-                    {nudges.length > 0 && (
-                        <AlertBox
-                            color="#FFD700"
-                            textColor="#0A0A0A"
-                            icon={Clock}
-                            title={`${nudges.length} item${nudges.length > 1 ? "s" : ""} past 48h — needs nudge`}
-                            items={nudges.slice(0, 3)}
-                            testid="alert-nudges"
-                            action={
-                                <button
-                                    onClick={() => bulkNudge(nudges.map((n) => n.id))}
-                                    disabled={bulkNudging}
-                                    data-testid="nudge-all-btn"
-                                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0A0A0A] text-white text-[10px] uppercase tracking-[0.18em] hover:bg-[#002FA7] transition-colors disabled:opacity-60"
-                                >
-                                    {bulkNudging ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
-                                    {bulkNudging ? "Nudging..." : `Nudge all (${nudges.length})`}
-                                </button>
-                            }
-                        />
-                    )}
-                </div>
+            {escalations.length > 0 && (
+                <EscalationAlert items={escalations.slice(0, 5)} />
             )}
 
-            <div className="border border-border" data-testid="recent-submissions">
+            {nudges.length > 0 && (
+                <NudgeTable
+                    items={nudges}
+                    onNudgeOne={nudgeOne}
+                    onBulkNudge={() => bulkNudge(nudges.map((n) => n.id))}
+                    bulkBusy={bulkNudging}
+                    rowBusy={rowNudging}
+                />
+            )}
+
+            <div className="border border-border mt-10" data-testid="recent-submissions">
                 <div className="flex items-center justify-between px-6 py-4 border-b border-border">
                     <div>
                         <div className="label-overline">Recent submissions</div>
                         <h3 className="font-display text-xl font-bold tracking-tight mt-1">Latest activity</h3>
                     </div>
-                    <div className="flex items-center gap-3">
-                        {nudges.length > 0 && (
-                            <button
-                                onClick={() => bulkNudge(nudges.map((n) => n.id))}
-                                disabled={bulkNudging}
-                                data-testid="nudge-all-table-btn"
-                                className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#FFD700] text-[#0A0A0A] text-xs uppercase tracking-[0.18em] font-medium hover:bg-[#0A0A0A] hover:text-white transition-colors disabled:opacity-60"
-                            >
-                                {bulkNudging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bell className="w-3.5 h-3.5" />}
-                                {bulkNudging ? "Nudging..." : `Nudge all past 48h (${nudges.length})`}
-                            </button>
-                        )}
-                        <Link to="/app/queue" className="text-sm flex items-center gap-1 hover:text-[#002FA7]" data-testid="view-all-link">
-                            View all <ArrowRight className="w-4 h-4" />
-                        </Link>
-                    </div>
+                    <Link to="/app/queue" className="text-sm flex items-center gap-1 hover:text-[#002FA7]" data-testid="view-all-link">
+                        View all <ArrowRight className="w-4 h-4" />
+                    </Link>
                 </div>
 
                 {loading ? (
@@ -186,14 +156,13 @@ export default function Overview() {
                                 <th className="text-left px-6 py-3 label-overline">Title</th>
                                 <th className="text-left px-6 py-3 label-overline">Stuck with</th>
                                 <th className="text-left px-6 py-3 label-overline">Status</th>
-                                <th className="text-left px-6 py-3 label-overline">Idle</th>
-                                <th className="text-right px-6 py-3 label-overline">Actions</th>
+                                <th className="text-left px-6 py-3 label-overline">Step idle</th>
+                                <th className="text-left px-6 py-3 label-overline"></th>
                             </tr>
                         </thead>
                         <tbody>
                             {recent.map((it) => {
-                                const canNudge = NUDGEABLE.has(it.status);
-                                const busy = !!rowNudging[it.id];
+                                const stepNum = (it.approval_chain?.length || 0) + 1;
                                 return (
                                     <tr key={it.id} className="border-b border-border last:border-b-0 hover:bg-[#F3F4F6] transition-colors" data-testid={`recent-row-${it.id}`}>
                                         <td className="px-6 py-3 font-medium">{it.title}</td>
@@ -214,20 +183,13 @@ export default function Overview() {
                                                 {statusLabels[it.status]}
                                             </span>
                                         </td>
-                                        <td className="px-6 py-3 font-mono text-xs">{it.idle_hours}h</td>
-                                        <td className="px-6 py-3 text-right whitespace-nowrap">
-                                            {canNudge && (
-                                                <button
-                                                    onClick={() => nudgeOne(it.id)}
-                                                    disabled={busy}
-                                                    data-testid={`row-nudge-${it.id}`}
-                                                    title="Nudge assigned reviewer"
-                                                    className="inline-flex items-center gap-1 px-2 py-1 mr-3 border border-border hover:bg-[#FFD700] hover:border-[#FFD700] text-xs disabled:opacity-60"
-                                                >
-                                                    {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
-                                                    <span className="uppercase tracking-wider text-[10px]">Nudge</span>
-                                                </button>
-                                            )}
+                                        <td className="px-6 py-3">
+                                            <div className="font-mono text-xs">{it.idle_hours}h</div>
+                                            <div className="text-[10px] text-muted-foreground flex items-center gap-1 mt-0.5">
+                                                <GitBranch className="w-2.5 h-2.5" /> step {stepNum}
+                                            </div>
+                                        </td>
+                                        <td className="px-6 py-3 text-right">
                                             <Link to={`/app/submission/${it.id}`} className="text-xs underline hover:text-[#002FA7]" data-testid={`open-${it.id}`}>
                                                 Open
                                             </Link>
@@ -243,26 +205,105 @@ export default function Overview() {
     );
 }
 
-function KPI({ label, value, accent, testid }) {
+function NudgeTable({ items, onNudgeOne, onBulkNudge, bulkBusy, rowBusy }) {
     return (
-        <div className="px-6 py-5 border-r border-b border-border last:border-r-0" data-testid={testid}>
-            <div className="label-overline mb-2">{label}</div>
-            <div className="font-display text-4xl font-bold tracking-tight" style={{ color: accent || "#0A0A0A" }}>
-                {value}
+        <div className="border border-[#FFD700] mb-10" data-testid="nudge-table">
+            <div className="flex items-center justify-between gap-3 px-5 py-3 bg-[#FFD700] text-[#0A0A0A]">
+                <div className="flex items-center gap-2 min-w-0">
+                    <Clock className="w-4 h-4 shrink-0" strokeWidth={2.25} />
+                    <span className="font-display font-bold tracking-tight">
+                        {items.length} item{items.length > 1 ? "s" : ""} past 48h — needs nudge
+                    </span>
+                </div>
+                <button
+                    onClick={onBulkNudge}
+                    disabled={bulkBusy}
+                    data-testid="nudge-all-btn"
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0A0A0A] text-white text-[10px] uppercase tracking-[0.18em] hover:bg-[#002FA7] transition-colors disabled:opacity-60"
+                >
+                    {bulkBusy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
+                    {bulkBusy ? "Nudging..." : `Nudge all (${items.length})`}
+                </button>
             </div>
+
+            <table className="w-full text-sm">
+                <thead>
+                    <tr className="border-b border-border bg-white">
+                        <th className="text-left px-5 py-2.5 label-overline">Title</th>
+                        <th className="text-left px-5 py-2.5 label-overline">Stuck with</th>
+                        <th className="text-left px-5 py-2.5 label-overline">Step idle</th>
+                        <th className="text-left px-5 py-2.5 label-overline">Current SLA</th>
+                        <th className="text-right px-5 py-2.5 label-overline">Action</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {items.map((it) => {
+                        const sla = currentSlaTarget(it);
+                        const stepNum = (it.approval_chain?.length || 0) + 1;
+                        const busy = !!rowBusy[it.id];
+                        return (
+                            <tr key={it.id} className="border-b border-border last:border-b-0 hover:bg-[#FFFEF7] transition-colors" data-testid={`nudge-row-${it.id}`}>
+                                <td className="px-5 py-2.5">
+                                    <Link to={`/app/submission/${it.id}`} className="font-medium hover:text-[#002FA7]">
+                                        {it.title}
+                                    </Link>
+                                </td>
+                                <td className="px-5 py-2.5">
+                                    {it.assigned_user_name ? (
+                                        <>
+                                            <div className="font-medium text-xs">{it.assigned_user_name}</div>
+                                            <div className="text-[10px] text-muted-foreground">
+                                                {it.assigned_user_designation || it.reviewer_role?.replace?.(/_/g, " ")}
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <span className="text-xs text-muted-foreground">—</span>
+                                    )}
+                                </td>
+                                <td className="px-5 py-2.5">
+                                    <div className={`font-mono text-xs ${it.idle_hours >= 72 ? "text-[#FF2400] font-bold" : ""}`}>
+                                        {it.idle_hours}h
+                                    </div>
+                                    <div className="text-[10px] text-muted-foreground flex items-center gap-1 mt-0.5">
+                                        <GitBranch className="w-2.5 h-2.5" /> step {stepNum}
+                                    </div>
+                                </td>
+                                <td className="px-5 py-2.5">
+                                    <div className="text-[10px] label-overline">{sla.label}</div>
+                                    <div className={`font-mono text-xs ${sla.breached ? "text-[#FF2400] font-bold" : ""}`}>
+                                        {sla.date || "—"}
+                                        {sla.breached && <span className="ml-1 text-[9px] uppercase tracking-wider">breached</span>}
+                                    </div>
+                                </td>
+                                <td className="px-5 py-2.5 text-right whitespace-nowrap">
+                                    <button
+                                        onClick={() => onNudgeOne(it.id)}
+                                        disabled={busy}
+                                        data-testid={`row-nudge-${it.id}`}
+                                        title="Nudge assigned reviewer"
+                                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-[#0A0A0A] text-white text-[10px] uppercase tracking-[0.18em] hover:bg-[#002FA7] disabled:opacity-60"
+                                    >
+                                        {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
+                                        {busy ? "..." : "Nudge"}
+                                    </button>
+                                </td>
+                            </tr>
+                        );
+                    })}
+                </tbody>
+            </table>
         </div>
     );
 }
 
-function AlertBox({ color, textColor = "#FFFFFF", icon: Icon, title, items, testid, action }) {
+function EscalationAlert({ items }) {
     return (
-        <div className="border" style={{ borderColor: color }} data-testid={testid}>
-            <div className="flex items-center justify-between gap-3 px-5 py-3" style={{ background: color, color: textColor }}>
-                <div className="flex items-center gap-2 min-w-0">
-                    <Icon className="w-4 h-4 shrink-0" strokeWidth={2.25} />
-                    <span className="font-display font-bold tracking-tight truncate">{title}</span>
-                </div>
-                {action}
+        <div className="border border-[#FF2400] mb-10" data-testid="alert-escalations">
+            <div className="flex items-center gap-2 px-5 py-3 bg-[#FF2400] text-white">
+                <AlertTriangle className="w-4 h-4" strokeWidth={2.25} />
+                <span className="font-display font-bold tracking-tight">
+                    {items.length} item{items.length > 1 ? "s" : ""} past 72h
+                </span>
             </div>
             <div className="divide-y divide-border">
                 {items.map((it) => (
@@ -275,6 +316,17 @@ function AlertBox({ color, textColor = "#FFFFFF", icon: Icon, title, items, test
                         <span className="font-mono text-xs text-muted-foreground whitespace-nowrap">{it.idle_hours}h idle</span>
                     </Link>
                 ))}
+            </div>
+        </div>
+    );
+}
+
+function KPI({ label, value, accent, testid }) {
+    return (
+        <div className="px-6 py-5 border-r border-b border-border last:border-r-0" data-testid={testid}>
+            <div className="label-overline mb-2">{label}</div>
+            <div className="font-display text-4xl font-bold tracking-tight" style={{ color: accent || "#0A0A0A" }}>
+                {value}
             </div>
         </div>
     );
