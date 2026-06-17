@@ -60,6 +60,7 @@ export default function SubmissionDetail() {
     const [proposedTimeline, setProposedTimeline] = useState(null);
     const [forwardMode, setForwardMode] = useState(false);
     const [forwardUserId, setForwardUserId] = useState("");
+    const [forwardTimeline, setForwardTimeline] = useState(null);
 
     const load = async () => {
         try {
@@ -131,12 +132,21 @@ export default function SubmissionDetail() {
             toast.error("Pick the next reviewer");
             return;
         }
+        if (!forwardTimeline || !forwardTimeline.accept_by || !forwardTimeline.review_by || !forwardTimeline.approve_by) {
+            toast.error("Set the timeline for the next reviewer");
+            return;
+        }
         setActing(true);
         try {
-            await api.post(`/submissions/${id}/approve-and-forward`, { note, assigned_user_id: forwardUserId });
+            await api.post(`/submissions/${id}/approve-and-forward`, {
+                note,
+                assigned_user_id: forwardUserId,
+                timeline: forwardTimeline,
+            });
             toast.success("Approved and forwarded");
             setForwardMode(false);
             setForwardUserId("");
+            setForwardTimeline(null);
             setNote("");
             await load();
         } catch (err) {
@@ -144,6 +154,17 @@ export default function SubmissionDetail() {
         } finally {
             setActing(false);
         }
+    };
+
+    const openForwardMode = () => {
+        const today = new Date();
+        const plus = (d) => new Date(today.getTime() + d * 86400000).toISOString().split("T")[0];
+        setForwardTimeline({
+            accept_by: plus(2),
+            review_by: plus(5),
+            approve_by: item?.timeline?.approve_by || plus(10),
+        });
+        setForwardMode(true);
     };
 
     if (loading) return <div className="p-10 text-sm text-muted-foreground">Loading...</div>;
@@ -398,7 +419,7 @@ export default function SubmissionDetail() {
                                 </button>
                                 {user?.role !== "ceo" && (
                                     <button
-                                        onClick={() => setForwardMode((v) => !v)}
+                                        onClick={() => (forwardMode ? setForwardMode(false) : openForwardMode())}
                                         disabled={acting}
                                         data-testid="approve-forward-toggle-btn"
                                         className="flex items-center justify-center gap-2 py-2.5 bg-[#002FA7] text-white hover:bg-[#0A0A0A] uppercase tracking-[0.18em] text-xs font-medium disabled:opacity-60"
@@ -409,6 +430,10 @@ export default function SubmissionDetail() {
                                 {forwardMode && (
                                     <div className="border border-[#002FA7] p-3 space-y-3" data-testid="forward-picker-block">
                                         <UserPicker value={forwardUserId} onChange={setForwardUserId} currentUserId={user?.id} />
+                                        <div>
+                                            <div className="label-overline mb-2">Per-step SLA for next reviewer</div>
+                                            <TimelineEditor value={forwardTimeline || {}} onChange={setForwardTimeline} />
+                                        </div>
                                         <button
                                             onClick={submitForward}
                                             disabled={acting || !forwardUserId}

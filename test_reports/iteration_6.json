@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 6 backend testing complete. Verified terminal-status guards on /approve, /request-revision, and /approve-and-forward; per-step SLA timeline replacement on forward; step_timeline capture on closed chain entries; auto_nudges_sent reset on forward; end-to-end 3-step chain with per-step SLAs (T1/T2/T3) and only-last-closed=true; scheduler uses CURRENT timeline (auto_nudge_accept fires after a forward sets a past accept_by). 16/16 iteration-6 pytest cases pass and the iteration-5 regression suite still passes 23/23.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration6_features.py",
+    "/app/test_reports/pytest/iteration6_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1321 lines — well beyond the 700-line guideline. Strongly recommend splitting into submodules (auth, submissions, decisions, analytics, files, notifications, scheduler).",
+    "DECISION_ALLOWED_FROM is the single source of truth for transition gating — good. Consider also gating /escalate and /mark-live by the same constant for symmetry (mark-live correctly requires status=='approved', escalate currently has no source-status guard).",
+    "'scored' is in SubmissionStatus literal but no normal flow produces a 'scored'-status submission (submissions are created in pending_acceptance/approved). Either remove from Literal or document the path. Terminal-status guard would refuse it for free since it is not in DECISION_ALLOWED_FROM, which is the desired behaviour.",
+    "ApproveForwardIn is now a dedicated pydantic model — good. assigned_user_id is a required str, so missing field returns 422; the manual `if not body.assigned_user_id` still catches empty strings with 400.",
+    "Per-step timeline replacement on forward is a destructive change (overwrites submission.timeline). Audit/recovery would be aided by keeping a small 'timeline_history' or relying on chain[*].step_timeline (already captured). Currently the closed step's SLA is preserved in chain entries, so this is acceptable.",
+    "auto_nudges_sent reset to {} on forward is correct for per-step SLA dedupe. Verified via test and scheduler-driven nudge after forward.",
+    "Submitter still receives kind='approved' notification on every forward step which can be misleading ('approved by X' for what is really an intermediate step). Consider a distinct kind like 'forwarded' for intermediate steps."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration6_features.py"
+  ],
+  "success_rate": {"backend": "100% (16/16 iteration-6; 23/23 iteration-5 regression)", "frontend": "n/a (backend-only iteration)"},
+  "test_credentials": "submitter@govern.app / reviewer@govern.app / lead@govern.app / vp@govern.app / ceo@govern.app — all Pass1234! (read from /app/memory/test_credentials.md)",
+  "seed_data_creation": "Created TEST_IT6_* submissions during the test run via the seeded accounts; no cleanup performed (prefix allows identification).",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 6 added (1) state-machine guards using DECISION_ALLOWED_FROM={'pending_acceptance','in_progress','under_review','escalated'} on /approve, /request-revision, and /approve-and-forward — all return 400 with detail mentioning the source status from terminal statuses (approved, revision_requested, live). (2) /approve-and-forward now uses new ApproveForwardIn pydantic model {note?, assigned_user_id: required, timeline?: Timeline} — when timeline is provided it REPLACES submission.timeline; the closed step's SLA is preserved in approval_chain[*].step_timeline. (3) auto_nudges_sent is reset to {} on each forward; the scheduler (/scheduler/run) uses the CURRENT submission.timeline for nudge computation. Regression suite at /app/backend/tests/test_iteration6_features.py is reusable.",
+  "rca of the issue": "n/a — no bugs found"
+}

@@ -715,6 +715,10 @@ async def forward_to_ceo(sub_id: str, body: EscalateIn, user: dict = Depends(get
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
+# Statuses an item can be in to accept reviewer-driven decisions
+DECISION_ALLOWED_FROM = {"pending_acceptance", "in_progress", "under_review", "escalated"}
+
+
 @api_router.post("/submissions/{sub_id}/approve")
 async def approve(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
     if user["role"] not in ("reviewer", "marketing_lead", "vp", "ceo"):
@@ -722,6 +726,8 @@ async def approve(sub_id: str, body: ActionIn, user: dict = Depends(get_current_
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] not in DECISION_ALLOWED_FROM:
+        raise HTTPException(status_code=400, detail=f"Cannot approve from status '{item['status']}'")
     if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
         raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can approve this")
     # Append to approval chain
@@ -733,6 +739,7 @@ async def approve(sub_id: str, body: ActionIn, user: dict = Depends(get_current_
         "approver_designation": user.get("designation", ""),
         "ts": now_iso(),
         "note": body.note or "",
+        "step_timeline": item.get("timeline"),
         "closed": True,
     })
     await db.submissions.update_one({"id": sub_id}, {"$set": {"approval_chain": chain}})
@@ -744,9 +751,15 @@ async def approve(sub_id: str, body: ActionIn, user: dict = Depends(get_current_
 MAX_CHAIN_DEPTH = 10
 
 
+class ApproveForwardIn(BaseModel):
+    note: Optional[str] = ""
+    assigned_user_id: str
+    timeline: Optional[Timeline] = None  # SLA for the NEXT step (per-step deadline)
+
+
 @api_router.post("/submissions/{sub_id}/approve-and-forward")
-async def approve_and_forward(sub_id: str, body: EscalateIn, user: dict = Depends(get_current_user)):
-    """Approve this step in the chain and forward to a specific next reviewer."""
+async def approve_and_forward(sub_id: str, body: ApproveForwardIn, user: dict = Depends(get_current_user)):
+    """Approve this step in the chain and forward to a specific next reviewer with their own SLA."""
     if user["role"] not in ("reviewer", "marketing_lead", "vp", "ceo"):
         raise HTTPException(status_code=403, detail="Not authorized")
     if user["role"] == "ceo":
@@ -756,10 +769,10 @@ async def approve_and_forward(sub_id: str, body: EscalateIn, user: dict = Depend
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] not in DECISION_ALLOWED_FROM:
+        raise HTTPException(status_code=400, detail=f"Cannot approve-and-forward from '{item['status']}'")
     if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
         raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can act on this")
-    if item["status"] not in ("in_progress", "pending_acceptance", "escalated"):
-        raise HTTPException(status_code=400, detail=f"Cannot approve-and-forward from '{item['status']}'")
 
     chain = item.get("approval_chain", []) or []
     if len(chain) >= MAX_CHAIN_DEPTH:
@@ -773,7 +786,7 @@ async def approve_and_forward(sub_id: str, body: EscalateIn, user: dict = Depend
     if target["id"] == user["id"]:
         raise HTTPException(status_code=400, detail="Cannot forward to yourself")
 
-    # Record approval in chain
+    # Capture the step the approver just closed (with its SLA)
     chain.append({
         "approver_id": user["id"],
         "approver_name": user["name"],
@@ -781,12 +794,12 @@ async def approve_and_forward(sub_id: str, body: EscalateIn, user: dict = Depend
         "approver_designation": user.get("designation", ""),
         "ts": now_iso(),
         "note": body.note or "",
+        "step_timeline": item.get("timeline"),  # SLA against which THIS approver was working
         "forwarded_to_id": target["id"],
         "forwarded_to_name": target["name"],
         "closed": False,
     })
 
-    # Roll up time spent in current stage
     elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
     durations = item.get("stage_durations", {}) or {}
     durations[item["status"]] = durations.get(item["status"], 0) + elapsed
@@ -799,26 +812,38 @@ async def approve_and_forward(sub_id: str, body: EscalateIn, user: dict = Depend
         "note": f"Approved → forwarded to {target['name']}" + (f" · {body.note}" if body.note else ""),
     }]
 
-    await db.submissions.update_one(
-        {"id": sub_id},
-        {"$set": {
-            "approval_chain": chain,
-            "status": "pending_acceptance",
-            "reviewer_role": target["role"],
-            "assigned_user_id": target["id"],
-            "assigned_user_name": target["name"],
-            "assigned_user_email": target.get("email"),
-            "assigned_user_designation": target.get("designation", ""),
-            "assigned_user_team": target.get("team", ""),
-            "stage_entered_at": now_iso(),
-            "stage_durations": durations,
-            "activity": activity,
-            "timeline_agreed": False,
-            "updated_at": now_iso(),
-        }},
+    set_fields = {
+        "approval_chain": chain,
+        "status": "pending_acceptance",
+        "reviewer_role": target["role"],
+        "assigned_user_id": target["id"],
+        "assigned_user_name": target["name"],
+        "assigned_user_email": target.get("email"),
+        "assigned_user_designation": target.get("designation", ""),
+        "assigned_user_team": target.get("team", ""),
+        "stage_entered_at": now_iso(),
+        "stage_durations": durations,
+        "activity": activity,
+        "timeline_agreed": False,
+        "updated_at": now_iso(),
+        "auto_nudges_sent": {},  # reset SLA dedupe for the new step
+    }
+    # Per-step SLA: if the approver supplied a new timeline for the next step, use it
+    if body.timeline:
+        set_fields["timeline"] = body.timeline.model_dump()
+
+    await db.submissions.update_one({"id": sub_id}, {"$set": set_fields})
+    next_tl = set_fields.get("timeline") or item.get("timeline") or {}
+    await create_notification(
+        target["id"], sub_id, "assigned",
+        f"Forwarded for your review: {item['title']}",
+        f"From {user['name']} · accept by {next_tl.get('accept_by', 'TBD')}",
     )
-    await create_notification(target["id"], sub_id, "assigned", f"Forwarded for your review: {item['title']}", f"From {user['name']}")
-    await create_notification(item["submitter_id"], sub_id, "approved", f"'{item['title']}' approved by {user['name']}", f"Forwarded to {target['name']} for next review")
+    await create_notification(
+        item["submitter_id"], sub_id, "approved",
+        f"'{item['title']}' approved by {user['name']}",
+        f"Forwarded to {target['name']} for next review",
+    )
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
@@ -829,6 +854,8 @@ async def request_revision(sub_id: str, body: RevisionIn, user: dict = Depends(g
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] not in DECISION_ALLOWED_FROM:
+        raise HTTPException(status_code=400, detail=f"Cannot request revision from status '{item['status']}'")
     if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
         raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can request revision")
     result = await _transition(sub_id, "revision_requested", user, "requested_revision", body.note)
