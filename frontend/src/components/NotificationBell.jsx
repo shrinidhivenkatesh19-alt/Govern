@@ -7,6 +7,7 @@ const kindAccent = {
     assigned: "#002FA7",
     accepted: "#16A34A",
     approved: "#16A34A",
+    forwarded: "#002FA7",
     live: "#0A0A0A",
     revision: "#FFD700",
     escalation: "#FF2400",

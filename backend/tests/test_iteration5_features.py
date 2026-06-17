@@ -264,7 +264,8 @@ class TestApproveAndForwardSuccess:
         lead_for_sid = [n for n in nr.json()["items"] if n["submission_id"] == sid and n["kind"] == "assigned"]
         assert len(lead_for_sid) >= 1
 
-    def test_submitter_receives_approved_notification(self, tokens):
+    def test_submitter_receives_forwarded_notification(self, tokens):
+        # Iteration 7: submitter now receives kind='forwarded' (was 'approved') on /approve-and-forward
         r = _make_sub(tokens, "submitter", assignee_id=tokens["reviewer"]["user"]["id"], tier="ceo_required")
         sid = r.json()["id"]
         _accept(tokens, "reviewer", sid)
@@ -274,8 +275,34 @@ class TestApproveAndForwardSuccess:
         assert rr.status_code == 200
 
         nr = requests.get(f"{BASE_URL}/notifications", headers=_h(tokens, "submitter"), timeout=20)
-        sub_for_sid = [n for n in nr.json()["items"] if n["submission_id"] == sid and n["kind"] == "approved"]
-        assert len(sub_for_sid) >= 1
+        sub_for_sid = [n for n in nr.json()["items"] if n["submission_id"] == sid and n["kind"] == "forwarded"]
+        assert len(sub_for_sid) >= 1, "submitter should receive a 'forwarded' notification on /approve-and-forward"
+        # And NO 'approved' notification should be emitted on the intermediate step
+        approved_for_sid = [n for n in nr.json()["items"] if n["submission_id"] == sid and n["kind"] == "approved"]
+        assert len(approved_for_sid) == 0, "intermediate /approve-and-forward must not emit kind='approved'"
+
+    def test_closing_approve_still_emits_approved_kind(self, tokens):
+        # After a forward chain, the final /approve must emit kind='approved' to submitter
+        r = _make_sub(tokens, "submitter", assignee_id=tokens["reviewer"]["user"]["id"], tier="ceo_required")
+        sid = r.json()["id"]
+        _accept(tokens, "reviewer", sid)
+        # forward reviewer → lead
+        f1 = requests.post(f"{BASE_URL}/submissions/{sid}/approve-and-forward",
+                           json={"assigned_user_id": tokens["lead"]["user"]["id"]},
+                           headers=_h(tokens, "reviewer"), timeout=20)
+        assert f1.status_code == 200
+        _accept(tokens, "lead", sid)
+        # lead closes via /approve
+        ar = requests.post(f"{BASE_URL}/submissions/{sid}/approve",
+                           json={"note": "final"}, headers=_h(tokens, "lead"), timeout=20)
+        assert ar.status_code == 200, ar.text
+        assert ar.json()["status"] == "approved"
+
+        nr = requests.get(f"{BASE_URL}/notifications", headers=_h(tokens, "submitter"), timeout=20)
+        approved = [n for n in nr.json()["items"] if n["submission_id"] == sid and n["kind"] == "approved"]
+        forwarded = [n for n in nr.json()["items"] if n["submission_id"] == sid and n["kind"] == "forwarded"]
+        assert len(approved) >= 1, "closing /approve must emit kind='approved' to submitter"
+        assert len(forwarded) >= 1, "earlier /approve-and-forward should still leave its 'forwarded' notification"
 
 
 # 5) /approve appends to approval_chain with closed=True

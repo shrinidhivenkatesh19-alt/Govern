@@ -1,0 +1,63 @@
+"""Auth router."""
+import uuid
+
+from fastapi import APIRouter, HTTPException, Depends
+
+from core import db, now_iso, hash_password, verify_password, make_token, get_current_user
+from models import RegisterIn, LoginIn
+
+router = APIRouter()
+
+
+@router.post("/auth/register")
+async def register(body: RegisterIn):
+    existing = await db.users.find_one({"email": body.email.lower()})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    user_id = str(uuid.uuid4())
+    doc = {
+        "id": user_id,
+        "email": body.email.lower(),
+        "name": body.name,
+        "role": body.role,
+        "team": body.team or "",
+        "designation": body.designation or "",
+        "password_hash": hash_password(body.password),
+        "created_at": now_iso(),
+    }
+    await db.users.insert_one(doc)
+    token = make_token(user_id, body.email.lower(), body.role)
+    return {
+        "token": token,
+        "user": {
+            "id": user_id, "email": body.email.lower(), "name": body.name,
+            "role": body.role, "team": doc["team"], "designation": doc["designation"],
+        },
+    }
+
+
+@router.post("/auth/login")
+async def login(body: LoginIn):
+    user = await db.users.find_one({"email": body.email.lower()})
+    if not user or not verify_password(body.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = make_token(user["id"], user["email"], user["role"])
+    return {
+        "token": token,
+        "user": {
+            "id": user["id"], "email": user["email"], "name": user["name"],
+            "role": user["role"], "team": user.get("team", ""),
+            "designation": user.get("designation", ""),
+        },
+    }
+
+
+@router.get("/auth/me")
+async def me(user: dict = Depends(get_current_user)):
+    return user
+
+
+@router.get("/users")
+async def list_users(user: dict = Depends(get_current_user)):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).to_list(500)
+    return users

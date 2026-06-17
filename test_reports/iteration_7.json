@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 7 regression: ran iteration 5 + iteration 6 suites against the refactored server (10 routers). 39/39 pre-existing tests pass after one test update (kind='approved' → kind='forwarded' on /approve-and-forward). Added 1 new test confirming closing /approve still emits kind='approved'. All 40 tests now pass. Smoke-checked all listed endpoints (auth/me, users, notifications, submissions, dashboard/stats, notifications/read-all, scheduler/run) → 200. Governance gating, terminal-status guards, per-step timeline replacement, approval-chain semantics, and scheduler-uses-current-timeline behaviour all verified intact.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration5_features.py",
+    "/app/backend/tests/test_iteration6_features.py",
+    "/app/test_reports/pytest/iteration7_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "submissions.py is 516 lines — already on the higher side; if more transitions are added, consider splitting into submissions_crud.py + submissions_transitions.py to stay under the 700-line guideline.",
+    "Notification 'kind' values are free-form strings scattered across submissions.py (assigned, forwarded, forwarded_to_ceo, approved, revision_requested, escalated, nudge, scored, live). Recommend centralising as a NotificationKind Literal/Enum in models.py to prevent typos in future iterations.",
+    "Test fixture _ensure_user re-registers users on cold DBs; OK for now, but seeding via a single fixture at session scope (already done) means a single missing field on register will silently shadow the existing DB state. Consider explicit /api/admin/seed endpoint."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_iteration5_features.py"
+  ],
+  "success_rate": {
+    "backend": "100% (40/40)",
+    "frontend": "not tested (backend-only request)"
+  },
+  "test_credentials": "submitter@govern.app / Pass1234!, reviewer@govern.app / Pass1234!, lead@govern.app / Pass1234!, vp@govern.app / Pass1234!, ceo@govern.app / Pass1234! — all seeded and verified",
+  "seed_data_creation": "None added beyond what the iteration 5/6 tests create (TEST_IT5_* / TEST_IT6_* prefixed submissions).",
+  "retest_needed": false,
+  "should_main_agent_self_test": false,
+  "context_for_next_testing_agent": "Iteration 5 test 'test_submitter_receives_approved_notification' was renamed to 'test_submitter_receives_forwarded_notification' and now asserts kind='forwarded' (matches iteration 7 behavior change). A second test 'test_closing_approve_still_emits_approved_kind' was added to lock in that the closing /approve continues to emit kind='approved'. Both suites are the canonical regression bundle for iteration 7+.",
+  "rca of the issue": "N/A — refactor only. Single pre-existing assertion needed updating because the behavior intentionally changed (notification kind on /approve-and-forward). After updating, all tests green."
+}
