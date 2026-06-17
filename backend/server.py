@@ -12,7 +12,7 @@ import bcrypt
 import jwt
 import requests
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr
+from pydantic import BaseModel, Field, EmailStr, model_validator
 from typing import List, Optional, Literal
 from datetime import datetime, timezone, timedelta
 
@@ -190,7 +190,13 @@ class SubmissionCreate(BaseModel):
     chosen_tier: Tier  # may differ from recommended (human override)
     attachments: List[Attachment] = Field(default_factory=list)
     timeline: Timeline
-    assigned_user_id: Optional[str] = None  # specific user the submitter chose to send this to (None for auto_approve)
+    assigned_user_id: Optional[str] = None  # required for non-auto_approve tiers
+
+    @model_validator(mode="after")
+    def _require_assignee_for_non_auto(self):
+        if self.chosen_tier != "auto_approve" and not (self.assigned_user_id or "").strip():
+            raise ValueError("assigned_user_id is required for non auto_approve tiers")
+        return self
 
 
 class TimelineProposal(BaseModel):
