@@ -131,7 +131,6 @@ async def get_current_user(creds: HTTPAuthorizationCredentials = Depends(securit
 # ---------- Models ----------
 Role = Literal["submitter", "reviewer", "marketing_lead", "vp", "ceo"]
 SubmissionStatus = Literal["scored", "pending_acceptance", "in_progress", "under_review", "approved", "revision_requested", "escalated", "live"]
-ContentType = Literal["social_post", "blog_article", "email_campaign", "press_release", "product_announcement", "partnership", "pricing_update", "ad_creative"]
 Tier = Literal["auto_approve", "product_only", "ceo_required"]
 
 
@@ -146,6 +145,8 @@ class RegisterIn(BaseModel):
     password: str
     name: str
     role: Role = "submitter"
+    team: Optional[str] = ""
+    designation: Optional[str] = ""
 
 
 class LoginIn(BaseModel):
@@ -155,7 +156,7 @@ class LoginIn(BaseModel):
 
 class ScoreIn(BaseModel):
     title: str
-    content_type: ContentType
+    request_type: str  # Free-text — replaces the legacy fixed content_type dropdown
     brief: str
     content: str
 
@@ -189,7 +190,7 @@ class SubmissionCreate(BaseModel):
     chosen_tier: Tier  # may differ from recommended (human override)
     attachments: List[Attachment] = Field(default_factory=list)
     timeline: Timeline
-    assigned_user_id: str  # specific user the submitter chose to send this to
+    assigned_user_id: Optional[str] = None  # specific user the submitter chose to send this to (None for auto_approve)
 
 
 class TimelineProposal(BaseModel):
@@ -660,6 +661,8 @@ async def forward_to_ceo(sub_id: str, body: EscalateIn, user: dict = Depends(get
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
+        raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} (the assigned VP) can forward this")
     if item["status"] not in ("in_progress", "pending_acceptance"):
         raise HTTPException(status_code=400, detail="Can only forward in_progress or pending submissions")
 

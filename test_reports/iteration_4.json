@@ -1,0 +1,29 @@
+{
+  "summary": "Iteration 4 backend RETEST after 3 critical fixes from iteration 3. 25/26 tests passed (96.2%). All 7 previously-failing critical tests now PASS: register w/ team+designation, register defaults, /score with request_type, /score rejects old content_type, accept gating, escalate to specific user, forward-to-ceo gating for non-assigned VP. All 18 of the originally-passing tests still pass. One previously-passing minor test now fails (regression): test_create_missing_assigned_user_fails — expects HTTP 422 but server returns 400. Root cause: SubmissionCreate.assigned_user_id was changed to Optional[str]=None, so missing field passes Pydantic validation and instead hits the runtime lookup which 400s with 'Assigned user not found'. Functionally still rejects, just with a different status code.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/submissions", "issue": "Missing assigned_user_id now returns 400 ('Assigned user not found') instead of 422 (Pydantic validation). assigned_user_id is Optional[str]=None in SubmissionCreate; for non-auto_approve tiers it should arguably be required at the schema level so callers get a structured 422 with field-level error. Either tighten the model or update the test expectation."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3_features.py",
+    "/app/test_reports/pytest/iteration4_results.xml"
+  ],
+  "action_items": [
+    "OPTIONAL/minor: Either (a) make assigned_user_id a required field on SubmissionCreate for non-auto_approve tiers so we get a 422 with proper field error, or (b) update test_create_missing_assigned_user_fails to expect 400. Server behavior is otherwise correct — it still rejects missing assignee."
+  ],
+  "critical_code_review_comments": [
+    "server.py line 384: db.users.find_one({'id': None}) is executed when assigned_user_id is missing — harmless but wasteful; add an explicit early check to short-circuit and return a clean validation error.",
+    "Pydantic schema: assigned_user_id is Optional with no validator tying it to chosen_tier (only auto_approve should permit None). A model-validator would catch this at schema layer and return 422 consistently."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "96.2% (25/26)", "frontend": "n/a"},
+  "test_credentials": "submitter@govern.app / Pass1234! ; reviewer@govern.app / Pass1234! ; lead@govern.app / Pass1234! ; vp@govern.app / Pass1234! ; ceo@govern.app / Pass1234!",
+  "seed_data_creation": "None. Tests use existing seeded users; submissions created during run are TEST_IT3_* prefixed.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 3 fixes verified working: (1) RegisterIn now has team+designation -> /auth/register returns 200 with team/designation populated and respects defaults. (2) ScoreIn now uses request_type (free-text) — accepts request_type, rejects old content_type. (3) forward-to-ceo enforces assigned_user_id gating — non-assigned VP gets blocked. Only outstanding minor: missing assigned_user_id returns 400 instead of 422 (schema is Optional). Iteration 1/2 test files have stale schemas and were NOT run.",
+  "rca of the issue": "test_create_missing_assigned_user_fails regression RCA: Before the fixes, assigned_user_id was implicitly required (e.g., not Optional) so Pydantic raised 422 on missing field. After fixes for the 3 critical items, SubmissionCreate.assigned_user_id is now Optional[str]=None (so auto_approve can omit it). The endpoint still rejects missing assignees for non-auto_approve tiers, but does so at the runtime DB-lookup stage (raise HTTPException 400 'Assigned user not found') instead of at the Pydantic validation stage. Mitigation: add a @model_validator(mode='after') on SubmissionCreate that requires assigned_user_id when chosen_tier != 'auto_approve', or update the test to assert status_code == 400."
+}
