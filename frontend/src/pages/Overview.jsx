@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
-import { AlertTriangle, Clock, CheckCircle2, ArrowRight, Activity, Bell, Loader2 } from "lucide-react";
+import { AlertTriangle, Clock, ArrowRight, Activity, Bell, Loader2 } from "lucide-react";
 
 const statusLabels = {
     scored: "Scored",
@@ -28,12 +28,15 @@ const statusColor = (s) =>
         live: "bg-[#0A0A0A] text-white",
     }[s] || "bg-[#F3F4F6]");
 
+const NUDGEABLE = new Set(["pending_acceptance", "in_progress", "under_review", "escalated"]);
+
 export default function Overview() {
     const { user } = useAuth();
     const [stats, setStats] = useState(null);
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
-    const [nudging, setNudging] = useState(false);
+    const [bulkNudging, setBulkNudging] = useState(false);
+    const [rowNudging, setRowNudging] = useState({});
 
     const load = async () => {
         const [a, s] = await Promise.all([api.get("/dashboard/stats"), api.get("/submissions")]);
@@ -50,27 +53,39 @@ export default function Overview() {
     const escalations = items.filter((i) => i.needs_escalation);
     const recent = items.slice(0, 5);
 
-    const nudgeAll = async () => {
-        if (!nudges.length) return;
-        setNudging(true);
+    const bulkNudge = async (ids) => {
+        if (!ids.length) return;
+        setBulkNudging(true);
         try {
-            const results = await Promise.allSettled(
-                nudges.map((it) =>
-                    api.post(`/submissions/${it.id}/nudge`, { note: "Bulk nudge from Control Room" }),
-                ),
-            );
-            const ok = results.filter((r) => r.status === "fulfilled").length;
-            const failed = results.length - ok;
+            const r = await api.post("/submissions/bulk-nudge", {
+                submission_ids: ids,
+                note: "Bulk nudge from Control Room",
+            });
+            const ok = r.data.nudged;
+            const failed = r.data.failed?.length || 0;
             if (failed === 0) {
                 toast.success(`Nudged ${ok} reviewer${ok === 1 ? "" : "s"}`);
             } else {
-                toast.warning(`Nudged ${ok}, ${failed} failed`);
+                toast.warning(`Nudged ${ok}, ${failed} skipped`);
             }
             await load();
         } catch (err) {
-            toast.error("Bulk nudge failed");
+            toast.error(err?.response?.data?.detail || "Bulk nudge failed");
         } finally {
-            setNudging(false);
+            setBulkNudging(false);
+        }
+    };
+
+    const nudgeOne = async (id) => {
+        setRowNudging((s) => ({ ...s, [id]: true }));
+        try {
+            await api.post(`/submissions/${id}/nudge`, { note: "Nudge from Control Room" });
+            toast.success("Reviewer nudged");
+            await load();
+        } catch (err) {
+            toast.error(err?.response?.data?.detail || "Nudge failed");
+        } finally {
+            setRowNudging((s) => ({ ...s, [id]: false }));
         }
     };
 
@@ -112,13 +127,13 @@ export default function Overview() {
                             testid="alert-nudges"
                             action={
                                 <button
-                                    onClick={nudgeAll}
-                                    disabled={nudging}
+                                    onClick={() => bulkNudge(nudges.map((n) => n.id))}
+                                    disabled={bulkNudging}
                                     data-testid="nudge-all-btn"
                                     className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#0A0A0A] text-white text-[10px] uppercase tracking-[0.18em] hover:bg-[#002FA7] transition-colors disabled:opacity-60"
                                 >
-                                    {nudging ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
-                                    {nudging ? "Nudging..." : `Nudge all (${nudges.length})`}
+                                    {bulkNudging ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
+                                    {bulkNudging ? "Nudging..." : `Nudge all (${nudges.length})`}
                                 </button>
                             }
                         />
@@ -135,13 +150,13 @@ export default function Overview() {
                     <div className="flex items-center gap-3">
                         {nudges.length > 0 && (
                             <button
-                                onClick={nudgeAll}
-                                disabled={nudging}
+                                onClick={() => bulkNudge(nudges.map((n) => n.id))}
+                                disabled={bulkNudging}
                                 data-testid="nudge-all-table-btn"
                                 className="inline-flex items-center gap-1.5 px-3 py-2 bg-[#FFD700] text-[#0A0A0A] text-xs uppercase tracking-[0.18em] font-medium hover:bg-[#0A0A0A] hover:text-white transition-colors disabled:opacity-60"
                             >
-                                {nudging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bell className="w-3.5 h-3.5" />}
-                                {nudging ? "Nudging..." : `Nudge all past 48h (${nudges.length})`}
+                                {bulkNudging ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Bell className="w-3.5 h-3.5" />}
+                                {bulkNudging ? "Nudging..." : `Nudge all past 48h (${nudges.length})`}
                             </button>
                         )}
                         <Link to="/app/queue" className="text-sm flex items-center gap-1 hover:text-[#002FA7]" data-testid="view-all-link">
@@ -172,38 +187,54 @@ export default function Overview() {
                                 <th className="text-left px-6 py-3 label-overline">Stuck with</th>
                                 <th className="text-left px-6 py-3 label-overline">Status</th>
                                 <th className="text-left px-6 py-3 label-overline">Idle</th>
-                                <th className="text-left px-6 py-3 label-overline"></th>
+                                <th className="text-right px-6 py-3 label-overline">Actions</th>
                             </tr>
                         </thead>
                         <tbody>
-                            {recent.map((it) => (
-                                <tr key={it.id} className="border-b border-border last:border-b-0 hover:bg-[#F3F4F6] transition-colors" data-testid={`recent-row-${it.id}`}>
-                                    <td className="px-6 py-3 font-medium">{it.title}</td>
-                                    <td className="px-6 py-3">
-                                        {it.assigned_user_name ? (
-                                            <>
-                                                <div className="font-medium text-xs">{it.assigned_user_name}</div>
-                                                <div className="text-[10px] text-muted-foreground">
-                                                    {it.assigned_user_designation || it.reviewer_role?.replace?.(/_/g, " ")}
-                                                </div>
-                                            </>
-                                        ) : (
-                                            <span className="text-xs text-muted-foreground">—</span>
-                                        )}
-                                    </td>
-                                    <td className="px-6 py-3">
-                                        <span className={`px-2 py-1 text-xs font-medium uppercase tracking-wider ${statusColor(it.status)}`}>
-                                            {statusLabels[it.status]}
-                                        </span>
-                                    </td>
-                                    <td className="px-6 py-3 font-mono text-xs">{it.idle_hours}h</td>
-                                    <td className="px-6 py-3 text-right">
-                                        <Link to={`/app/submission/${it.id}`} className="text-xs underline hover:text-[#002FA7]">
-                                            Open
-                                        </Link>
-                                    </td>
-                                </tr>
-                            ))}
+                            {recent.map((it) => {
+                                const canNudge = NUDGEABLE.has(it.status);
+                                const busy = !!rowNudging[it.id];
+                                return (
+                                    <tr key={it.id} className="border-b border-border last:border-b-0 hover:bg-[#F3F4F6] transition-colors" data-testid={`recent-row-${it.id}`}>
+                                        <td className="px-6 py-3 font-medium">{it.title}</td>
+                                        <td className="px-6 py-3">
+                                            {it.assigned_user_name ? (
+                                                <>
+                                                    <div className="font-medium text-xs">{it.assigned_user_name}</div>
+                                                    <div className="text-[10px] text-muted-foreground">
+                                                        {it.assigned_user_designation || it.reviewer_role?.replace?.(/_/g, " ")}
+                                                    </div>
+                                                </>
+                                            ) : (
+                                                <span className="text-xs text-muted-foreground">—</span>
+                                            )}
+                                        </td>
+                                        <td className="px-6 py-3">
+                                            <span className={`px-2 py-1 text-xs font-medium uppercase tracking-wider ${statusColor(it.status)}`}>
+                                                {statusLabels[it.status]}
+                                            </span>
+                                        </td>
+                                        <td className="px-6 py-3 font-mono text-xs">{it.idle_hours}h</td>
+                                        <td className="px-6 py-3 text-right whitespace-nowrap">
+                                            {canNudge && (
+                                                <button
+                                                    onClick={() => nudgeOne(it.id)}
+                                                    disabled={busy}
+                                                    data-testid={`row-nudge-${it.id}`}
+                                                    title="Nudge assigned reviewer"
+                                                    className="inline-flex items-center gap-1 px-2 py-1 mr-3 border border-border hover:bg-[#FFD700] hover:border-[#FFD700] text-xs disabled:opacity-60"
+                                                >
+                                                    {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <Bell className="w-3 h-3" />}
+                                                    <span className="uppercase tracking-wider text-[10px]">Nudge</span>
+                                                </button>
+                                            )}
+                                            <Link to={`/app/submission/${it.id}`} className="text-xs underline hover:text-[#002FA7]" data-testid={`open-${it.id}`}>
+                                                Open
+                                            </Link>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
                         </tbody>
                     </table>
                 )}

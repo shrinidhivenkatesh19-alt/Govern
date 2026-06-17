@@ -1,0 +1,32 @@
+{
+  "summary": "Iteration 8 backend testing complete — POST /api/submissions/bulk-nudge, centralised NotificationKind Literal, and per-row /nudge regression. 10/10 tests passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_iteration8_bulk_nudge.py",
+    "/app/test_reports/pytest/iteration8_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "Route ordering in submissions.py is correct: /submissions/bulk-nudge declared before /submissions/{sub_id}/nudge so the static path is matched first — verified working.",
+    "BulkNudgeIn does not cap submission_ids length; consider adding `Field(max_length=200)` to prevent abuse via very large payloads (tested up to 50 successfully).",
+    "bulk_nudge fetches items via $in but iterates in client; if a duplicate id appears in submission_ids it will be nudged twice (two activity entries, two notifications). Consider de-duplicating submission_ids at the top of the handler.",
+    "When a nudged item has no assigned_user_id, notify_role fan-out can mass-create notifications (200 user cap). Acceptable for now but worth bounding in future.",
+    "NotificationKind soft-warn in notifications.py is good defensive design — confirmed via tailing backend.err.log that 'nudge_manual' triggers no warning."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "100%", "frontend": "n/a"},
+  "test_credentials": "submitter@govern.app / Pass1234! (and reviewer/lead/vp/ceo all @govern.app same password). All five accounts already seeded.",
+  "seed_data_creation": "Tests create ephemeral submissions prefixed with TEST_IT8_ via the authenticated submitter account. ~58 submissions are created per full run (most for the 50-id scale test). No teardown — historical TEST_ data accumulates; consider a one-shot cleanup script later.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Iteration 8 feature set is fully green. The test file /app/backend/tests/test_iteration8_bulk_nudge.py is the regression suite for bulk-nudge, NotificationKind Literal, and per-row /nudge. Notifications list endpoint caps at 100 items — when asserting notification counts at scale, prefer checking the subset that references the nudged submission_ids rather than absolute count delta. The scale test creates ~53 submissions; if MongoDB grows large, the /notifications list (capped at 100, sorted desc) will start truncating older nudge_manual rows.",
+  "rca of the issue": "N/A — no bugs found."
+}

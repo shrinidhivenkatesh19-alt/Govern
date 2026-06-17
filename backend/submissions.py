@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends
 from core import db, now_iso, get_current_user, DECISION_ALLOWED_FROM, MAX_CHAIN_DEPTH
 from models import (
     SubmissionCreate, AcceptIn, ActionIn, RevisionIn, EscalateIn,
-    ApproveForwardIn, TimelineProposal, Tier, SubmissionStatus,
+    ApproveForwardIn, TimelineProposal, Tier, SubmissionStatus, BulkNudgeIn,
 )
 from notifications import create_notification, notify_role
 
@@ -497,6 +497,53 @@ async def mark_live(sub_id: str, body: ActionIn, user: dict = Depends(get_curren
     result = await _transition(sub_id, "live", user, "marked_live", body.note or "Published live")
     await create_notification(item["submitter_id"], sub_id, "live", f"'{item['title']}' is live", "")
     return result
+
+
+@router.post("/submissions/bulk-nudge")
+async def bulk_nudge(body: BulkNudgeIn, user: dict = Depends(get_current_user)):
+    """Nudge many submissions in one request. Returns per-id results."""
+    if not body.submission_ids:
+        raise HTTPException(status_code=400, detail="submission_ids required")
+    note_text = body.note or "Bulk nudge from Control Room"
+    nudged_ids: list = []
+    failed: list = []
+
+    items = await db.submissions.find({"id": {"$in": body.submission_ids}}).to_list(len(body.submission_ids))
+    items_by_id = {it["id"]: it for it in items}
+
+    for sid in body.submission_ids:
+        item = items_by_id.get(sid)
+        if not item:
+            failed.append({"id": sid, "reason": "not_found"})
+            continue
+        if item["status"] not in ("pending_acceptance", "in_progress", "under_review", "escalated"):
+            failed.append({"id": sid, "reason": f"status_{item['status']}"})
+            continue
+
+        activity_entry = {
+            "ts": now_iso(),
+            "actor": user["name"],
+            "actor_role": user["role"],
+            "action": "nudged",
+            "note": note_text,
+        }
+        await db.submissions.update_one(
+            {"id": sid},
+            {"$push": {"activity": activity_entry}, "$set": {"updated_at": now_iso()}},
+        )
+        if item.get("assigned_user_id"):
+            await create_notification(
+                item["assigned_user_id"], sid, "nudge_manual",
+                f"Nudged: {item['title']}", note_text,
+            )
+        else:
+            await notify_role(
+                item.get("reviewer_role", ""), sid, "nudge_manual",
+                f"Nudged: {item['title']}", note_text,
+            )
+        nudged_ids.append(sid)
+
+    return {"nudged": len(nudged_ids), "nudged_ids": nudged_ids, "failed": failed}
 
 
 @router.post("/submissions/{sub_id}/nudge")

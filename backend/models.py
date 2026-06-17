@@ -10,6 +10,24 @@ SubmissionStatus = Literal[
 ]
 Tier = Literal["auto_approve", "product_only", "ceo_required"]
 
+# Centralised notification kinds — keep in sync with NotificationBell.jsx kindAccent map
+NotificationKind = Literal[
+    "assigned",            # submission newly assigned to a reviewer
+    "accepted",            # reviewer accepted the assignment
+    "approved",            # terminal approval (chain closed)
+    "forwarded",           # intermediate approval-and-forward (to submitter)
+    "forwarded_to_ceo",    # VP forwarded to CEO
+    "live",                # marked live
+    "revision",            # revision requested
+    "escalation",          # manual escalation
+    "auto_escalation",     # scheduler-driven escalation
+    "auto_nudge_accept",   # SLA breach on accept_by
+    "auto_nudge_review",   # SLA breach on review_by
+    "nudge_manual",        # manual or bulk nudge
+    "timeline_proposed",   # timeline change proposed
+    "timeline_agreed",     # other party agreed
+]
+
 
 # -------- Auth --------
 class RegisterIn(BaseModel):
@@ -109,3 +127,8 @@ class ApproveForwardIn(BaseModel):
     note: Optional[str] = ""
     assigned_user_id: str
     timeline: Optional[Timeline] = None
+
+
+class BulkNudgeIn(BaseModel):
+    submission_ids: List[str]
+    note: Optional[str] = ""

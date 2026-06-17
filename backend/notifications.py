@@ -1,15 +1,22 @@
 """Notification helpers + endpoints."""
 import uuid
-from typing import Optional
+from typing import Optional, get_args
 
 from fastapi import APIRouter, Depends
 
 from core import db, now_iso, get_current_user
+from models import NotificationKind
 
 router = APIRouter()
 
+_VALID_KINDS = set(get_args(NotificationKind))
+
 
 async def create_notification(user_id: str, submission_id: str, kind: str, title: str, body: str):
+    if kind not in _VALID_KINDS:
+        # Soft-warn rather than crash — keeps behaviour permissive while flagging typos.
+        from core import logger
+        logger.warning(f"Unknown notification kind '{kind}' — not in NotificationKind enum")
     doc = {
         "id": str(uuid.uuid4()),
         "user_id": user_id,
