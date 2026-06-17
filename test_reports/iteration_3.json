@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 3 backend testing: 19/26 tests passed (73%). Two CRITICAL backend bugs found: (1) /api/auth/register returns 500 because RegisterIn Pydantic model is missing team and designation fields, while the endpoint body accesses body.team and body.designation — AttributeError: 'RegisterIn' object has no attribute 'team'. (2) /api/score still uses the OLD schema (ScoreIn.content_type: ContentType literal) — the spec said it should accept free-text request_type. Sending request_type fails with 422 missing content_type; sending content_type='blog_article' triggers a separate 500 (likely downstream LLM/agent). All other iteration-3 features (assigned_user_id required + denormalized fields on /submissions, auto_approve bypass, /accept/approve/request-revision specific-user gating, escalate with optional assigned_user_id + auto-pick same team, nudge to specific user, propose-timeline notifies the other specific party, scheduler creates notification only for assigned_user_id) work correctly. forward-to-ceo does NOT enforce assigned_user_id gating (only checks role==vp) — spec violation.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "POST /api/auth/register", "issue": "500 AttributeError: RegisterIn has no attribute 'team'. The endpoint reads body.team and body.designation but the Pydantic model (server.py lines 144-148) does not declare them. Add `team: Optional[str] = ''` and `designation: Optional[str] = ''` to RegisterIn. Pre-seeded users already in DB via prior iterations work via /auth/login, masking the bug at startup.", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/score", "issue": "Schema NOT migrated to request_type. ScoreIn still has `content_type: ContentType` (literal of 8 values). Sending the new payload {request_type: 'internal_newsletter', ...} returns 422 'content_type missing'. The spec explicitly required free-text request_type on /score. Replace ScoreIn.content_type with `request_type: str` and update the LLM prompt template accordingly (the prompt already references Request Type at line 314 so only the model field is wrong).", "priority": "CRITICAL"},
+      {"endpoint": "POST /api/submissions/{id}/forward-to-ceo", "issue": "Does NOT enforce assigned_user_id gating. Code only checks `user['role'] != 'vp'` (line 658-659). Any VP can forward any submission, even one assigned to a different VP. Spec: VP-only AND must be the assigned user. Add: `if item.get('assigned_user_id') and user['id'] != item['assigned_user_id']: raise HTTPException(403, ...)`.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/score with content_type", "issue": "When the old content_type literal is sent, the endpoint returns 500 (likely the LLM/extract_json path failing) instead of a clean 4xx. After the request_type migration this becomes moot."},
+      {"endpoint": "POST /api/submissions", "issue": "When chosen_tier=auto_approve, request_type is still required and submission stores assigned_user_id=None, assigned_user_name=None, assigned_user_email=None — verify analytics aggregations tolerate None for these fields."},
+      {"endpoint": "POST /api/submissions/{id}/escalate (no body)", "issue": "Body is EscalateIn but if request omits body, FastAPI rejects with 422. Consider defaulting body to EscalateIn() (Optional Body) so escalate without arguments still works as documented."}
+    ]
+  },
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_iteration3_features.py",
+    "/app/test_reports/pytest/iteration3_results.xml"
+  ],
+  "action_items": [
+    "Add `team: Optional[str] = ''` and `designation: Optional[str] = ''` fields to RegisterIn model in server.py (~line 144).",
+    "Replace `content_type: ContentType` in ScoreIn with `request_type: str` (free-text) — spec says /score should use request_type like /submissions.",
+    "Add assigned_user_id gating to /forward-to-ceo (currently only role-checked, allowing any VP to forward submissions assigned to other VPs).",
+    "Backfill team/designation on pre-seeded users — verified: submitter=Marketing/Marketing Associate, reviewer=Product/Senior Product Manager, lead=Marketing/Head of Marketing, vp=Marketing/VP of Marketing, ceo=Executive/Chief Executive Officer all returned correctly by /auth/me, /auth/login, /users (assuming users were created in a prior iteration with these fields; no fresh-register path tested due to the RegisterIn bug above)."
+  ],
+  "critical_code_review_comments": [
+    "RegisterIn Pydantic model is out of sync with the register handler — schema must declare every field the handler reads. This is a basic class of bug; consider adding a unit test that POSTs /auth/register with a fresh email on every CI run.",
+    "ScoreIn was not updated when the submission schema migrated to request_type. Two places carry the same conceptual field — keep them in sync (consider one shared ContentRequest model).",
+    "forward-to-ceo gating omission is a logic-level oversight: every other action endpoint (accept/approve/request-revision/escalate) has the assigned_user_id check, but forward-to-ceo doesn't. Add a shared helper `_require_assigned(item, user)` to enforce this uniformly.",
+    "_pick_next_assignee returns the first user found via to_list(100) with no deterministic ordering — fine functionally but tests asserting which user is chosen could flake. Add an explicit .sort('created_at', 1) for stability.",
+    "server.py is now 1167 lines — the 700-line threshold was already flagged in iteration 2 and grew further. Split into routers (auth, scoring, submissions, notifications, scheduler) now before more drift accumulates.",
+    "EscalateIn has no validation that assigned_user_id is non-empty if provided — empty string would currently fall to the auto-pick branch via Optional. Acceptable but worth pydantic constraints (min_length=1)."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration3_features.py"],
+  "success_rate": {"backend": "73% (19/26 iteration-3)", "frontend": "n/a"},
+  "test_credentials": "submitter@govern.app / reviewer@govern.app / lead@govern.app / vp@govern.app / ceo@govern.app — all Pass1234! (pre-existing in DB with correct team/designation; new registrations BROKEN until RegisterIn fix is applied)",
+  "seed_data_creation": "Created ~20 TEST_IT3_* prefixed submissions covering assignment/gating flows. Most are pending_acceptance or in_progress and will continue to accumulate notifications until terminal states.",
+  "retest_needed": true,
+  "main_agent_can_self_test": false,
+  "context_for_next_testing_agent": "After E1 fixes the 3 issues (RegisterIn fields, ScoreIn request_type, forward-to-ceo gating), re-run /app/backend/tests/test_iteration3_features.py. The 7 failing tests are: test_register_accepts_team_designation, test_register_defaults_team_designation_empty (both blocked on RegisterIn fix), test_score_with_request_type_succeeds, test_score_with_old_content_type_fails (both blocked on ScoreIn fix), test_accept_blocks_other_users_even_same_role + test_escalate_to_specific_user + test_forward_to_ceo_blocks_non_assigned_vp (all blocked by RegisterIn — they register alt users mid-test). Iteration 1/2 test files (test_content_approval.py, test_iteration2_features.py) still use the old /score and /submissions schemas and will need rewrites before they can serve as regression — they were not re-run in this iteration.",
+  "rca of the issue": "RegisterIn missing fields: classic Pydantic v2 behavior where unknown fields are silently dropped, so body.team raises AttributeError when accessed. RCA path: /auth/register POST → Pydantic validates RegisterIn (succeeds, drops team/designation) → handler accesses body.team → AttributeError → 500. Reproduction: curl -X POST $URL/api/auth/register -d '{\"email\":\"x@y.com\",\"password\":\"Pass1234!\",\"name\":\"X\",\"team\":\"Q\",\"designation\":\"E\"}'. Fix: add `team: Optional[str] = ''; designation: Optional[str] = ''` to RegisterIn (~line 148). ScoreIn: same root cause class — the model wasn't updated when the spec changed; the LLM prompt was. Fix: change ScoreIn.content_type to request_type: str."
+}

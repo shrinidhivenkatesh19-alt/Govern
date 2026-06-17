@@ -126,14 +126,17 @@ export default function SubmissionDetail() {
     if (!item) return null;
 
     const isSubmitter = user?.id === item.submitter_id;
-    const isAssignedReviewer = user?.role === item.reviewer_role;
+    const isAssignedReviewer = item.assigned_user_id ? user?.id === item.assigned_user_id : user?.role === item.reviewer_role;
     const canApprove = ["reviewer", "marketing_lead", "vp", "ceo"].includes(user?.role) && isAssignedReviewer;
     const canAccept = item.status === "pending_acceptance" && isAssignedReviewer;
-    const canForwardToCEO = user?.role === "vp" && ["in_progress", "pending_acceptance"].includes(item.status);
+    const canForwardToCEO = user?.role === "vp" && isAssignedReviewer && ["in_progress", "pending_acceptance"].includes(item.status);
     const canMarkLive = item.status === "approved" && (isAssignedReviewer || isSubmitter);
     const isOpen = ["under_review", "escalated", "revision_requested", "in_progress"].includes(item.status);
     const canEscalate = ["reviewer", "marketing_lead"].includes(user?.role) && isAssignedReviewer && isOpen;
-    const canProposeTimeline = (isSubmitter || isAssignedReviewer) && !item.pending_timeline_proposal && ["pending_acceptance", "in_progress", "under_review"].includes(item.status);
+    const canProposeTimeline =
+        (isSubmitter || isAssignedReviewer) &&
+        !item.pending_timeline_proposal &&
+        ["pending_acceptance", "in_progress", "under_review"].includes(item.status);
     const proposal = item.pending_timeline_proposal;
     const otherPartyMustAgree = proposal && user?.id !== proposal.proposed_by && (isSubmitter || isAssignedReviewer);
 
@@ -148,11 +151,11 @@ export default function SubmissionDetail() {
             <div className="flex items-start justify-between gap-6 mb-8">
                 <div>
                     <div className="label-overline mb-2">
-                        {item.content_type.replace(/_/g, " ")} · assigned to {item.reviewer_role.replace(/_/g, " ")}
+                        {item.request_type || item.content_type?.replace?.(/_/g, " ") || "Submission"}
                     </div>
                     <h1 className="font-display text-4xl font-bold tracking-tight max-w-2xl">{item.title}</h1>
                     <div className="flex flex-wrap items-center gap-4 mt-3 text-sm text-muted-foreground">
-                        <span>By {item.submitter_name}</span>
+                        <span>By {item.submitter_name}{item.submitter_designation ? ` · ${item.submitter_designation}` : ""}</span>
                         <span>·</span>
                         <span className="font-mono">Deadline {item.deadline}</span>
                         <span>·</span>
@@ -165,6 +168,18 @@ export default function SubmissionDetail() {
                             </span>
                         )}
                     </div>
+                    {item.assigned_user_name && (
+                        <div className="inline-flex items-center gap-2 mt-3 px-3 py-1.5 border border-[#002FA7]" data-testid="assignee-block">
+                            <span className="label-overline text-[#002FA7]">Stuck with</span>
+                            <span className="font-medium">{item.assigned_user_name}</span>
+                            {item.assigned_user_designation && (
+                                <span className="text-xs text-muted-foreground">· {item.assigned_user_designation}</span>
+                            )}
+                            {item.assigned_user_team && (
+                                <span className="text-xs text-muted-foreground">· {item.assigned_user_team}</span>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 <span

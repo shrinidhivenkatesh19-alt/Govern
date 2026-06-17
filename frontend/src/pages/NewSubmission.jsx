@@ -1,22 +1,13 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import AIScoringPanel from "@/components/AIScoringPanel";
 import FileUploader from "@/components/FileUploader";
 import TimelineEditor from "@/components/TimelineEditor";
+import UserPicker from "@/components/UserPicker";
 import { Sparkles, Send, RotateCcw } from "lucide-react";
-
-const contentTypes = [
-    { value: "social_post", label: "Social Post" },
-    { value: "blog_article", label: "Blog Article" },
-    { value: "email_campaign", label: "Email Campaign" },
-    { value: "press_release", label: "Press Release" },
-    { value: "product_announcement", label: "Product Announcement" },
-    { value: "partnership", label: "Partnership" },
-    { value: "pricing_update", label: "Pricing Update" },
-    { value: "ad_creative", label: "Ad Creative" },
-];
 
 const tiers = [
     { value: "auto_approve", label: "Auto-Approve", color: "#16A34A" },
@@ -24,11 +15,20 @@ const tiers = [
     { value: "ceo_required", label: "CEO Required", color: "#FF2400" },
 ];
 
+const requestExamples = [
+    "Social post — LinkedIn announcement",
+    "Q3 launch press release",
+    "Pricing change email to enterprise customers",
+    "Partnership announcement (banking)",
+    "Internal town hall talking points",
+];
+
 export default function NewSubmission() {
     const navigate = useNavigate();
+    const { user } = useAuth();
     const [form, setForm] = useState({
         title: "",
-        content_type: "social_post",
+        request_type: "",
         brief: "",
         content: "",
         deadline: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0],
@@ -39,6 +39,7 @@ export default function NewSubmission() {
         approve_by: new Date(Date.now() + 12 * 86400000).toISOString().split("T")[0],
     });
     const [attachments, setAttachments] = useState([]);
+    const [assignedUserId, setAssignedUserId] = useState("");
     const [scoring, setScoring] = useState(false);
     const [result, setResult] = useState(null);
     const [chosenTier, setChosenTier] = useState(null);
@@ -47,8 +48,8 @@ export default function NewSubmission() {
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
 
     const runAgent = async () => {
-        if (!form.title || !form.brief || !form.content) {
-            toast.error("Fill title, brief, and content first");
+        if (!form.title || !form.request_type || !form.brief || !form.content) {
+            toast.error("Fill title, request type, brief, and content first");
             return;
         }
         setScoring(true);
@@ -56,7 +57,7 @@ export default function NewSubmission() {
         try {
             const r = await api.post("/score", {
                 title: form.title,
-                content_type: form.content_type,
+                request_type: form.request_type,
                 brief: form.brief,
                 content: form.content,
             });
@@ -75,6 +76,10 @@ export default function NewSubmission() {
             toast.error("Run the agent first");
             return;
         }
+        if (chosenTier !== "auto_approve" && !assignedUserId) {
+            toast.error("Pick a person to send this to");
+            return;
+        }
         setSubmitting(true);
         try {
             const r = await api.post("/submissions", {
@@ -83,6 +88,7 @@ export default function NewSubmission() {
                 chosen_tier: chosenTier,
                 attachments,
                 timeline,
+                assigned_user_id: assignedUserId || user?.id, // auto_approve uses self placeholder
             });
             toast.success("Submission entered the chain");
             navigate(`/app/submission/${r.data.id}`);
@@ -94,13 +100,14 @@ export default function NewSubmission() {
     };
 
     const reset = () => {
-        setForm({ title: "", content_type: "social_post", brief: "", content: "", deadline: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0] });
+        setForm({ title: "", request_type: "", brief: "", content: "", deadline: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0] });
         setTimeline({
             accept_by: new Date(Date.now() + 2 * 86400000).toISOString().split("T")[0],
             review_by: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
             approve_by: new Date(Date.now() + 12 * 86400000).toISOString().split("T")[0],
         });
         setAttachments([]);
+        setAssignedUserId("");
         setResult(null);
         setChosenTier(null);
     };
@@ -108,7 +115,7 @@ export default function NewSubmission() {
     return (
         <div className="p-8 lg:p-10" data-testid="new-submission-page">
             <div className="mb-8">
-                <div className="label-overline mb-2">Step 1 · Brief → Step 2 · Agent → Step 3 · Confirm tier → Submit</div>
+                <div className="label-overline mb-2">Brief → Agent → Confirm tier → Pick reviewer → Submit</div>
                 <h1 className="font-display text-4xl font-bold tracking-tight">New submission.</h1>
             </div>
 
@@ -131,31 +138,31 @@ export default function NewSubmission() {
                             />
                         </Field>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <Field label="Content type">
-                                <select
-                                    value={form.content_type}
-                                    onChange={(e) => set("content_type", e.target.value)}
-                                    data-testid="content-type-select"
-                                    className="w-full px-3 py-2.5 border border-border bg-white focus:outline-none focus:ring-2 focus:ring-[#002FA7]"
-                                >
-                                    {contentTypes.map((c) => (
-                                        <option key={c.value} value={c.value}>
-                                            {c.label}
-                                        </option>
-                                    ))}
-                                </select>
-                            </Field>
-                            <Field label="Deadline">
-                                <input
-                                    type="date"
-                                    value={form.deadline}
-                                    onChange={(e) => set("deadline", e.target.value)}
-                                    data-testid="deadline-input"
-                                    className="w-full px-3 py-2.5 border border-border focus:outline-none focus:ring-2 focus:ring-[#002FA7]"
-                                />
-                            </Field>
-                        </div>
+                        <Field label="Request — describe what you need approved (free text)">
+                            <input
+                                value={form.request_type}
+                                onChange={(e) => set("request_type", e.target.value)}
+                                list="request-examples"
+                                data-testid="request-type-input"
+                                placeholder="e.g. Social post for product launch, Press release, Internal memo..."
+                                className="w-full px-3 py-2.5 border border-border focus:outline-none focus:ring-2 focus:ring-[#002FA7]"
+                            />
+                            <datalist id="request-examples">
+                                {requestExamples.map((r) => (
+                                    <option key={r} value={r} />
+                                ))}
+                            </datalist>
+                        </Field>
+
+                        <Field label="Deadline">
+                            <input
+                                type="date"
+                                value={form.deadline}
+                                onChange={(e) => set("deadline", e.target.value)}
+                                data-testid="deadline-input"
+                                className="w-full px-3 py-2.5 border border-border focus:outline-none focus:ring-2 focus:ring-[#002FA7]"
+                            />
+                        </Field>
 
                         <Field label="Brief / context (audience, goal, CTA, channel)">
                             <textarea
@@ -212,7 +219,7 @@ export default function NewSubmission() {
                     </div>
                 </div>
 
-                {/* Agent + Confirm */}
+                {/* Agent + Tier + Assignee + Submit */}
                 <div className="xl:col-span-2 space-y-6">
                     <AIScoringPanel result={result} loading={scoring} />
 
@@ -242,16 +249,29 @@ export default function NewSubmission() {
                                                     </div>
                                                     {isRec && <div className="text-xs text-muted-foreground mt-0.5">Agent recommended</div>}
                                                 </div>
-                                                <span className="w-3 h-3 border-2" style={{ borderColor: t.color, background: isSel ? t.color : "transparent" }} />
+                                                <span
+                                                    className="w-3 h-3 border-2"
+                                                    style={{ borderColor: t.color, background: isSel ? t.color : "transparent" }}
+                                                />
                                             </div>
                                         </button>
                                     );
                                 })}
                             </div>
 
+                            {chosenTier && chosenTier !== "auto_approve" && (
+                                <div className="mb-5">
+                                    <UserPicker
+                                        value={assignedUserId}
+                                        onChange={setAssignedUserId}
+                                        currentUserId={user?.id}
+                                    />
+                                </div>
+                            )}
+
                             <button
                                 onClick={submit}
-                                disabled={submitting || !chosenTier}
+                                disabled={submitting || !chosenTier || (chosenTier !== "auto_approve" && !assignedUserId)}
                                 data-testid="submit-final-btn"
                                 className="w-full flex items-center justify-center gap-2 py-3 bg-[#002FA7] text-white hover:bg-[#0A0A0A] uppercase tracking-[0.18em] text-xs font-medium disabled:opacity-60"
                             >

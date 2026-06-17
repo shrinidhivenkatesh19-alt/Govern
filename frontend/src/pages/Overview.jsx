@@ -117,7 +117,7 @@ export default function Overview() {
                         <thead>
                             <tr className="border-b border-border bg-[#F3F4F6]">
                                 <th className="text-left px-6 py-3 label-overline">Title</th>
-                                <th className="text-left px-6 py-3 label-overline">Type</th>
+                                <th className="text-left px-6 py-3 label-overline">Stuck with</th>
                                 <th className="text-left px-6 py-3 label-overline">Status</th>
                                 <th className="text-left px-6 py-3 label-overline">Idle</th>
                                 <th className="text-left px-6 py-3 label-overline"></th>
@@ -127,7 +127,18 @@ export default function Overview() {
                             {recent.map((it) => (
                                 <tr key={it.id} className="border-b border-border last:border-b-0 hover:bg-[#F3F4F6] transition-colors" data-testid={`recent-row-${it.id}`}>
                                     <td className="px-6 py-3 font-medium">{it.title}</td>
-                                    <td className="px-6 py-3 text-muted-foreground text-xs uppercase tracking-wider">{it.content_type.replace(/_/g, " ")}</td>
+                                    <td className="px-6 py-3">
+                                        {it.assigned_user_name ? (
+                                            <>
+                                                <div className="font-medium text-xs">{it.assigned_user_name}</div>
+                                                <div className="text-[10px] text-muted-foreground">
+                                                    {it.assigned_user_designation || it.reviewer_role?.replace?.(/_/g, " ")}
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <span className="text-xs text-muted-foreground">—</span>
+                                        )}
+                                    </td>
                                     <td className="px-6 py-3">
                                         <span className={`px-2 py-1 text-xs font-medium uppercase tracking-wider ${statusColor(it.status)}`}>
                                             {statusLabels[it.status]}

@@ -6,16 +6,29 @@ import { UserPlus } from "lucide-react";
 
 const roles = [
     { value: "submitter", label: "Submitter", desc: "Marketing rep submitting briefs" },
-    { value: "reviewer", label: "Reviewer", desc: "Product team approver" },
+    { value: "reviewer", label: "Reviewer", desc: "Team-member approver" },
     { value: "marketing_lead", label: "Marketing Lead", desc: "Escalation handler" },
     { value: "vp", label: "Vice President", desc: "Forwards CEO-bound items" },
     { value: "ceo", label: "CEO", desc: "Final tier — innovation & risk" },
 ];
 
+const teamSuggestions = [
+    "Marketing",
+    "Product",
+    "Sales",
+    "Operations",
+    "Brand",
+    "Growth",
+    "Engineering",
+    "Finance",
+    "Legal",
+    "Executive",
+];
+
 export default function Register() {
     const { register } = useAuth();
     const navigate = useNavigate();
-    const [form, setForm] = useState({ name: "", email: "", password: "", role: "submitter" });
+    const [form, setForm] = useState({ name: "", email: "", password: "", role: "submitter", team: "Marketing", designation: "" });
     const [loading, setLoading] = useState(false);
 
     const set = (k, v) => setForm((f) => ({ ...f, [k]: v }));
@@ -36,7 +49,7 @@ export default function Register() {
 
     return (
         <div className="min-h-screen bg-white flex items-center justify-center p-6 lg:p-12">
-            <form onSubmit={onSubmit} className="w-full max-w-xl border border-border p-8 lg:p-10" data-testid="register-form">
+            <form onSubmit={onSubmit} className="w-full max-w-2xl border border-border p-8 lg:p-10" data-testid="register-form">
                 <div className="label-overline mb-3">Create account</div>
                 <h2 className="font-display text-3xl font-bold tracking-tight mb-8">Join the approval chain.</h2>
 
@@ -77,8 +90,39 @@ export default function Register() {
                     />
                 </label>
 
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                    <label className="block">
+                        <span className="label-overline block mb-2">Team / Department</span>
+                        <input
+                            required
+                            list="team-list"
+                            value={form.team}
+                            onChange={(e) => set("team", e.target.value)}
+                            data-testid="register-team-input"
+                            placeholder="Marketing, Product, Sales..."
+                            className="w-full px-3 py-2.5 border border-border focus:outline-none focus:ring-2 focus:ring-[#002FA7]"
+                        />
+                        <datalist id="team-list">
+                            {teamSuggestions.map((t) => (
+                                <option key={t} value={t} />
+                            ))}
+                        </datalist>
+                    </label>
+                    <label className="block">
+                        <span className="label-overline block mb-2">Designation</span>
+                        <input
+                            required
+                            value={form.designation}
+                            onChange={(e) => set("designation", e.target.value)}
+                            data-testid="register-designation-input"
+                            placeholder="Senior Product Manager"
+                            className="w-full px-3 py-2.5 border border-border focus:outline-none focus:ring-2 focus:ring-[#002FA7]"
+                        />
+                    </label>
+                </div>
+
                 <div className="mb-6">
-                    <span className="label-overline block mb-2">Role</span>
+                    <span className="label-overline block mb-2">Funnel level</span>
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                         {roles.map((r) => (
                             <button

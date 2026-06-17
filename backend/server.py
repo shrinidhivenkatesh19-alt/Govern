@@ -181,7 +181,7 @@ class Attachment(BaseModel):
 
 class SubmissionCreate(BaseModel):
     title: str
-    content_type: ContentType
+    request_type: str  # Free-text replaces the old content_type dropdown
     brief: str
     content: str
     deadline: str  # ISO date
@@ -189,6 +189,7 @@ class SubmissionCreate(BaseModel):
     chosen_tier: Tier  # may differ from recommended (human override)
     attachments: List[Attachment] = Field(default_factory=list)
     timeline: Timeline
+    assigned_user_id: str  # specific user the submitter chose to send this to
 
 
 class TimelineProposal(BaseModel):
@@ -211,6 +212,11 @@ class RevisionIn(BaseModel):
     note: str
 
 
+class EscalateIn(BaseModel):
+    note: Optional[str] = ""
+    assigned_user_id: Optional[str] = None  # if set, escalate to this specific user (must be in the next role)
+
+
 # ---------- Auth Routes ----------
 @api_router.post("/auth/register")
 async def register(body: RegisterIn):
@@ -223,12 +229,14 @@ async def register(body: RegisterIn):
         "email": body.email.lower(),
         "name": body.name,
         "role": body.role,
+        "team": body.team or "",
+        "designation": body.designation or "",
         "password_hash": hash_password(body.password),
         "created_at": now_iso(),
     }
     await db.users.insert_one(doc)
     token = make_token(user_id, body.email.lower(), body.role)
-    return {"token": token, "user": {"id": user_id, "email": body.email.lower(), "name": body.name, "role": body.role}}
+    return {"token": token, "user": {"id": user_id, "email": body.email.lower(), "name": body.name, "role": body.role, "team": doc["team"], "designation": doc["designation"]}}
 
 
 @api_router.post("/auth/login")
@@ -237,7 +245,14 @@ async def login(body: LoginIn):
     if not user or not verify_password(body.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     token = make_token(user["id"], user["email"], user["role"])
-    return {"token": token, "user": {"id": user["id"], "email": user["email"], "name": user["name"], "role": user["role"]}}
+    return {"token": token, "user": {
+        "id": user["id"],
+        "email": user["email"],
+        "name": user["name"],
+        "role": user["role"],
+        "team": user.get("team", ""),
+        "designation": user.get("designation", ""),
+    }}
 
 
 @api_router.get("/auth/me")
@@ -296,7 +311,7 @@ async def score_content(body: ScoreIn, user: dict = Depends(get_current_user)):
     ).with_model("anthropic", "claude-sonnet-4-5-20250929")
 
     user_text = f"""Title: {body.title}
-Content Type: {body.content_type}
+Request Type: {body.request_type}
 
 Brief:
 {body.brief}
@@ -361,11 +376,17 @@ def reviewer_role_for_tier(tier: Tier) -> str:
 async def create_submission(body: SubmissionCreate, user: dict = Depends(get_current_user)):
     sub_id = str(uuid.uuid4())
     status_val = initial_status_for_tier(body.chosen_tier)
-    reviewer_role = reviewer_role_for_tier(body.chosen_tier)
+    suggested_role = reviewer_role_for_tier(body.chosen_tier)
     now = now_iso()
 
+    # Look up the assigned user
+    assignee = await db.users.find_one({"id": body.assigned_user_id}, {"_id": 0, "password_hash": 0})
+    if not assignee and status_val != "approved":
+        raise HTTPException(status_code=400, detail="Assigned user not found")
+
     activity = [
-        {"ts": now, "actor": user["name"], "actor_role": user["role"], "action": "submitted", "note": f"Submitted as {body.chosen_tier}; timeline proposed"},
+        {"ts": now, "actor": user["name"], "actor_role": user["role"], "action": "submitted",
+         "note": f"Submitted as {body.chosen_tier}" + (f"; assigned to {assignee['name']}" if assignee else "; auto-approved")},
     ]
     if status_val == "approved":
         activity.append({"ts": now, "actor": "Agent", "actor_role": "system", "action": "auto_approved", "note": "Routine content, auto-approved by agent"})
@@ -373,16 +394,24 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
     doc = {
         "id": sub_id,
         "title": body.title,
-        "content_type": body.content_type,
+        "request_type": body.request_type,
+        "content_type": body.request_type,  # back-compat for analytics aggregations
         "brief": body.brief,
         "content": body.content,
         "deadline": body.deadline,
         "score_result": body.score_result.model_dump(),
         "chosen_tier": body.chosen_tier,
-        "reviewer_role": reviewer_role,
+        "reviewer_role": (assignee["role"] if assignee else suggested_role),
+        "assigned_user_id": (assignee["id"] if assignee else None),
+        "assigned_user_name": (assignee["name"] if assignee else None),
+        "assigned_user_email": (assignee.get("email") if assignee else None),
+        "assigned_user_designation": (assignee.get("designation", "") if assignee else None),
+        "assigned_user_team": (assignee.get("team", "") if assignee else None),
         "status": status_val,
         "submitter_id": user["id"],
         "submitter_name": user["name"],
+        "submitter_team": user.get("team", ""),
+        "submitter_designation": user.get("designation", ""),
         "created_at": now,
         "updated_at": now,
         "stage_entered_at": now,
@@ -390,14 +419,13 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
         "activity": activity,
         "attachments": [a.model_dump() for a in body.attachments],
         "timeline": body.timeline.model_dump(),
-        "timeline_agreed": False,  # reviewer hasn't agreed yet
+        "timeline_agreed": False,
     }
     await db.submissions.insert_one(doc)
 
-    # Notify reviewers of the assigned role
-    if status_val == "pending_acceptance":
-        await notify_role(
-            reviewer_role,
+    if status_val == "pending_acceptance" and assignee:
+        await create_notification(
+            assignee["id"],
             sub_id,
             "assigned",
             f"New submission needs acceptance: {body.title}",
@@ -493,14 +521,17 @@ async def _transition(sub_id: str, new_status: SubmissionStatus, actor: dict, ac
 
 @api_router.post("/submissions/{sub_id}/accept")
 async def accept_assignment(sub_id: str, body: AcceptIn, user: dict = Depends(get_current_user)):
-    """Reviewer (or VP for ceo_required) accepts the assignment, optionally proposing updated timeline."""
+    """Assigned user accepts the assignment, optionally proposing updated timeline."""
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
     if item["status"] != "pending_acceptance":
         raise HTTPException(status_code=400, detail=f"Cannot accept from status '{item['status']}'")
-    if user["role"] != item["reviewer_role"]:
-        raise HTTPException(status_code=403, detail=f"Only {item['reviewer_role']} can accept this")
+    assignee_id = item.get("assigned_user_id")
+    if assignee_id and user["id"] != assignee_id:
+        raise HTTPException(status_code=403, detail=f"Only the assigned user ({item.get('assigned_user_name')}) can accept this")
+    if not assignee_id and user["role"] != item.get("reviewer_role"):
+        raise HTTPException(status_code=403, detail=f"Only {item.get('reviewer_role')} can accept this")
 
     set_fields = {}
     note = body.note or "Assignment accepted"
@@ -547,7 +578,7 @@ async def propose_timeline(sub_id: str, body: TimelineProposal, user: dict = Dep
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
     is_submitter = user["id"] == item["submitter_id"]
-    is_reviewer = user["role"] == item["reviewer_role"]
+    is_reviewer = user["id"] == item.get("assigned_user_id") or (not item.get("assigned_user_id") and user["role"] == item.get("reviewer_role"))
     if not (is_submitter or is_reviewer):
         raise HTTPException(status_code=403, detail="Only submitter or assigned reviewer can propose timeline")
 
@@ -577,13 +608,11 @@ async def propose_timeline(sub_id: str, body: TimelineProposal, user: dict = Dep
             "updated_at": now_iso(),
         }},
     )
-    # Notify the other party
-    other_user_id = item["submitter_id"] if is_reviewer else None
-    other_role = item["reviewer_role"] if is_submitter else None
-    if other_user_id:
-        await create_notification(other_user_id, sub_id, "timeline_proposed", f"Timeline change proposed for '{item['title']}'", f"By {user['name']}")
-    if other_role:
-        await notify_role(other_role, sub_id, "timeline_proposed", f"Timeline change proposed for '{item['title']}'", f"By {user['name']}")
+    # Notify the other party (specific user when possible)
+    if is_reviewer:
+        await create_notification(item["submitter_id"], sub_id, "timeline_proposed", f"Timeline change proposed for '{item['title']}'", f"By {user['name']}")
+    elif is_submitter and item.get("assigned_user_id"):
+        await create_notification(item["assigned_user_id"], sub_id, "timeline_proposed", f"Timeline change proposed for '{item['title']}'", f"By {user['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
@@ -596,7 +625,7 @@ async def agree_timeline(sub_id: str, body: ActionIn, user: dict = Depends(get_c
     if not proposal:
         raise HTTPException(status_code=400, detail="No pending timeline proposal")
     is_submitter = user["id"] == item["submitter_id"]
-    is_reviewer = user["role"] == item["reviewer_role"]
+    is_reviewer = user["id"] == item.get("assigned_user_id") or (not item.get("assigned_user_id") and user["role"] == item.get("reviewer_role"))
     # The one who didn't propose must agree
     if proposal["proposed_by"] == user["id"] or not (is_submitter or is_reviewer):
         raise HTTPException(status_code=403, detail="Other party must agree to the proposal")
@@ -624,8 +653,8 @@ async def agree_timeline(sub_id: str, body: ActionIn, user: dict = Depends(get_c
 
 
 @api_router.post("/submissions/{sub_id}/forward-to-ceo")
-async def forward_to_ceo(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
-    """VP-only action: forward an in-progress submission to the CEO for final decision."""
+async def forward_to_ceo(sub_id: str, body: EscalateIn, user: dict = Depends(get_current_user)):
+    """VP-only action: forward to a specific CEO user (or auto-pick one)."""
     if user["role"] != "vp":
         raise HTTPException(status_code=403, detail="Only VPs can forward to CEO")
     item = await db.submissions.find_one({"id": sub_id})
@@ -634,12 +663,23 @@ async def forward_to_ceo(sub_id: str, body: ActionIn, user: dict = Depends(get_c
     if item["status"] not in ("in_progress", "pending_acceptance"):
         raise HTTPException(status_code=400, detail="Can only forward in_progress or pending submissions")
 
+    # Pick target CEO user
+    target = None
+    if body.assigned_user_id:
+        target = await db.users.find_one({"id": body.assigned_user_id, "role": "ceo"}, {"_id": 0, "password_hash": 0})
+        if not target:
+            raise HTTPException(status_code=400, detail="Target user not found or not a CEO")
+    else:
+        target = await _pick_next_assignee(item, "ceo")
+    if not target:
+        raise HTTPException(status_code=400, detail="No CEO user available to forward to")
+
     activity_entry = {
         "ts": now_iso(),
         "actor": user["name"],
         "actor_role": user["role"],
         "action": "forwarded_to_ceo",
-        "note": body.note or "Forwarded to CEO by VP",
+        "note": body.note or f"Forwarded to CEO ({target['name']}) by VP",
     }
     elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
     durations = item.get("stage_durations", {}) or {}
@@ -649,6 +689,11 @@ async def forward_to_ceo(sub_id: str, body: ActionIn, user: dict = Depends(get_c
         {"id": sub_id},
         {"$set": {
             "reviewer_role": "ceo",
+            "assigned_user_id": target["id"],
+            "assigned_user_name": target["name"],
+            "assigned_user_email": target.get("email"),
+            "assigned_user_designation": target.get("designation", ""),
+            "assigned_user_team": target.get("team", ""),
             "status": "pending_acceptance",
             "stage_entered_at": now_iso(),
             "stage_durations": durations,
@@ -656,7 +701,8 @@ async def forward_to_ceo(sub_id: str, body: ActionIn, user: dict = Depends(get_c
             "updated_at": now_iso(),
         }},
     )
-    await notify_role("ceo", sub_id, "forwarded_to_ceo", f"Submission forwarded to you: {item['title']}", f"From VP {user['name']}")
+    await create_notification(target["id"], sub_id, "forwarded_to_ceo", f"Submission forwarded to you: {item['title']}", f"From VP {user['name']}")
+    await create_notification(item["submitter_id"], sub_id, "forwarded_to_ceo", f"'{item['title']}' forwarded to CEO", f"VP {user['name']} forwarded to {target['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
@@ -667,6 +713,8 @@ async def approve(sub_id: str, body: ActionIn, user: dict = Depends(get_current_
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
+        raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can approve this")
     result = await _transition(sub_id, "approved", user, "approved", body.note or "")
     await create_notification(item["submitter_id"], sub_id, "approved", f"'{item['title']}' approved", f"By {user['name']}")
     return result
@@ -679,21 +727,36 @@ async def request_revision(sub_id: str, body: RevisionIn, user: dict = Depends(g
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
+        raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can request revision")
     result = await _transition(sub_id, "revision_requested", user, "requested_revision", body.note)
     await create_notification(item["submitter_id"], sub_id, "revision", f"Revision requested on '{item['title']}'", body.note)
     return result
 
 
 @api_router.post("/submissions/{sub_id}/escalate")
-async def escalate(sub_id: str, body: ActionIn, user: dict = Depends(get_current_user)):
-    """Escalate one level up. Team members → marketing_lead, marketing_lead → vp. Cannot directly escalate to CEO except via /forward-to-ceo (VP only)."""
+async def escalate(sub_id: str, body: EscalateIn, user: dict = Depends(get_current_user)):
+    """Escalate one level up to a specific user. reviewer → marketing_lead, marketing_lead → vp."""
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
     next_role_map = {"reviewer": "marketing_lead", "marketing_lead": "vp"}
     if user["role"] not in next_role_map:
         raise HTTPException(status_code=403, detail="This role cannot escalate further (use forward-to-ceo if VP)")
+    if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
+        raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can escalate this")
     new_role = next_role_map[user["role"]]
+
+    target = None
+    if body.assigned_user_id:
+        target = await db.users.find_one({"id": body.assigned_user_id, "role": new_role}, {"_id": 0, "password_hash": 0})
+        if not target:
+            raise HTTPException(status_code=400, detail=f"Target user not found or not a {new_role}")
+    else:
+        target = await _pick_next_assignee(item, new_role)
+    if not target:
+        raise HTTPException(status_code=400, detail=f"No {new_role} user available")
+
     elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
     durations = item.get("stage_durations", {}) or {}
     durations[item["status"]] = durations.get(item["status"], 0) + elapsed
@@ -702,20 +765,26 @@ async def escalate(sub_id: str, body: ActionIn, user: dict = Depends(get_current
         "actor": user["name"],
         "actor_role": user["role"],
         "action": "escalated",
-        "note": body.note or f"Escalated to {new_role}",
+        "note": body.note or f"Escalated to {target['name']} ({new_role})",
     }
     await db.submissions.update_one(
         {"id": sub_id},
         {"$set": {
             "status": "escalated",
             "reviewer_role": new_role,
+            "assigned_user_id": target["id"],
+            "assigned_user_name": target["name"],
+            "assigned_user_email": target.get("email"),
+            "assigned_user_designation": target.get("designation", ""),
+            "assigned_user_team": target.get("team", ""),
             "stage_entered_at": now_iso(),
             "stage_durations": durations,
             "activity": item.get("activity", []) + [activity_entry],
             "updated_at": now_iso(),
         }},
     )
-    await notify_role(new_role, sub_id, "escalation", f"Escalated to you: {item['title']}", f"From {user['name']}")
+    await create_notification(target["id"], sub_id, "escalation", f"Escalated to you: {item['title']}", f"From {user['name']}")
+    await create_notification(item["submitter_id"], sub_id, "escalation", f"'{item['title']}' escalated", f"{user['name']} → {target['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
@@ -745,8 +814,24 @@ async def nudge(sub_id: str, body: ActionIn, user: dict = Depends(get_current_us
         "note": body.note or "Reviewer nudged",
     })
     await db.submissions.update_one({"id": sub_id}, {"$set": {"activity": activity, "updated_at": now_iso()}})
-    await notify_role(item["reviewer_role"], sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
+    if item.get("assigned_user_id"):
+        await create_notification(item["assigned_user_id"], sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
+    else:
+        await notify_role(item.get("reviewer_role", ""), sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+
+
+async def _pick_next_assignee(item: dict, next_role: str) -> Optional[dict]:
+    """Pick a specific user for the next role. Prefer same team as current assignee, else any user with that role."""
+    current_team = (item.get("assigned_user_team") or "").strip()
+    candidates = await db.users.find({"role": next_role}).to_list(100)
+    if not candidates:
+        return None
+    if current_team:
+        same_team = [c for c in candidates if (c.get("team") or "").strip() == current_team]
+        if same_team:
+            return same_team[0]
+    return candidates[0]
 
 
 # ---------- Notifications API ----------
@@ -963,7 +1048,10 @@ async def run_sla_check():
         activity_additions = []
 
         async def fire(kind: str, msg: str):
-            await notify_role(item["reviewer_role"], sub_id, kind, f"SLA breach: {item['title']}", msg)
+            if item.get("assigned_user_id"):
+                await create_notification(item["assigned_user_id"], sub_id, kind, f"SLA breach: {item['title']}", msg)
+            else:
+                await notify_role(item.get("reviewer_role", ""), sub_id, kind, f"SLA breach: {item['title']}", msg)
             activity_additions.append({
                 "ts": now_iso(),
                 "actor": "Agent",
@@ -1003,25 +1091,42 @@ async def run_sla_check():
                 elapsed_secs = (now - datetime.fromisoformat(item["stage_entered_at"])).total_seconds()
                 durations = item.get("stage_durations", {}) or {}
                 durations[item["status"]] = durations.get(item["status"], 0) + elapsed_secs
-                activity_additions.append({
-                    "ts": now_iso(),
-                    "actor": "Agent",
-                    "actor_role": "system",
-                    "action": "auto_escalated",
-                    "note": f"≥80% of timeline elapsed without decision; routed from {current_role} to {new_role}",
-                })
+
                 if new_role != current_role:
-                    await notify_role(new_role, sub_id, "auto_escalation", f"Auto-escalated: {item['title']}", f"Reached deadline threshold; previously with {current_role}")
-                    await db.submissions.update_one(
-                        {"id": sub_id},
-                        {"$set": {
-                            "status": "escalated",
-                            "reviewer_role": new_role,
-                            "stage_entered_at": now_iso(),
-                            "stage_durations": durations,
-                            "updated_at": now_iso(),
-                        }},
-                    )
+                    target = await _pick_next_assignee(item, new_role)
+                    target_name = target["name"] if target else f"any {new_role}"
+                    activity_additions.append({
+                        "ts": now_iso(),
+                        "actor": "Agent",
+                        "actor_role": "system",
+                        "action": "auto_escalated",
+                        "note": f"≥80% of timeline elapsed without decision; routed from {current_role} to {target_name}",
+                    })
+                    update_set = {
+                        "status": "escalated",
+                        "reviewer_role": new_role,
+                        "stage_entered_at": now_iso(),
+                        "stage_durations": durations,
+                        "updated_at": now_iso(),
+                    }
+                    if target:
+                        update_set.update({
+                            "assigned_user_id": target["id"],
+                            "assigned_user_name": target["name"],
+                            "assigned_user_email": target.get("email"),
+                            "assigned_user_designation": target.get("designation", ""),
+                            "assigned_user_team": target.get("team", ""),
+                        })
+                        await create_notification(target["id"], sub_id, "auto_escalation", f"Auto-escalated to you: {item['title']}", f"Reached deadline threshold; previously with {current_role}")
+                    await db.submissions.update_one({"id": sub_id}, {"$set": update_set})
+                else:
+                    activity_additions.append({
+                        "ts": now_iso(),
+                        "actor": "Agent",
+                        "actor_role": "system",
+                        "action": "auto_escalated",
+                        "note": f"≥80% of timeline elapsed without decision (no higher role available)",
+                    })
                 new_nudges["hard_escalation"] = today
 
         if activity_additions or new_nudges != last_nudges:
