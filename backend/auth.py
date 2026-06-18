@@ -1,10 +1,12 @@
 """Auth router."""
+import asyncio
 import uuid
 
 from fastapi import APIRouter, HTTPException, Depends
 
 from core import db, now_iso, hash_password, verify_password, make_token, get_current_user
 from models import RegisterIn, LoginIn
+from email_service import send_onboarding
 
 router = APIRouter()
 
@@ -27,13 +29,13 @@ async def register(body: RegisterIn):
     }
     await db.users.insert_one(doc)
     token = make_token(user_id, body.email.lower(), body.role)
-    return {
-        "token": token,
-        "user": {
-            "id": user_id, "email": body.email.lower(), "name": body.name,
-            "role": body.role, "team": doc["team"], "designation": doc["designation"],
-        },
+    user_payload = {
+        "id": user_id, "email": body.email.lower(), "name": body.name,
+        "role": body.role, "team": doc["team"], "designation": doc["designation"],
     }
+    # Fire-and-forget onboarding email (non-blocking, never fails the registration flow)
+    asyncio.create_task(send_onboarding(user_payload))
+    return {"token": token, "user": user_payload}
 
 
 @router.post("/auth/login")

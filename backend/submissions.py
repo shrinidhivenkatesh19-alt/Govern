@@ -1,4 +1,5 @@
 """Submissions router — create, list, get, transitions (accept/approve/forward/escalate/etc.)."""
+import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
@@ -11,6 +12,7 @@ from models import (
     ApproveForwardIn, TimelineProposal, Tier, SubmissionStatus, BulkNudgeIn,
 )
 from notifications import create_notification, notify_role
+from email_service import send_assignment, send_nudge
 
 router = APIRouter()
 
@@ -167,6 +169,8 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
             f"New submission needs acceptance: {body.title}",
             f"From {user['name']} · accept by {body.timeline.accept_by}",
         )
+        # Email assignment
+        asyncio.create_task(send_assignment(assignee, doc, user, body.timeline.accept_by))
 
     doc.pop("_id", None)
     return doc
@@ -422,6 +426,8 @@ async def approve_and_forward(sub_id: str, body: ApproveForwardIn, user: dict = 
     await create_notification(target["id"], sub_id, "assigned",
                               f"Forwarded for your review: {item['title']}",
                               f"From {user['name']} · accept by {next_tl.get('accept_by', 'TBD')}")
+    # Email the new assignee about the forwarded submission
+    asyncio.create_task(send_assignment(target, {**item, **set_fields}, user, next_tl.get("accept_by", "")))
     # Distinct notification kind for intermediate approvals
     await create_notification(item["submitter_id"], sub_id, "forwarded",
                               f"'{item['title']}' approved & forwarded by {user['name']}",
@@ -536,6 +542,10 @@ async def bulk_nudge(body: BulkNudgeIn, user: dict = Depends(get_current_user)):
                 item["assigned_user_id"], sid, "nudge_manual",
                 f"Nudged: {item['title']}", note_text,
             )
+            # Email the assignee
+            assignee = await db.users.find_one({"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0})
+            if assignee:
+                asyncio.create_task(send_nudge(assignee, item, user, note_text))
         else:
             await notify_role(
                 item.get("reviewer_role", ""), sid, "nudge_manual",
@@ -558,6 +568,10 @@ async def nudge(sub_id: str, body: ActionIn, user: dict = Depends(get_current_us
     await db.submissions.update_one({"id": sub_id}, {"$set": {"activity": activity, "updated_at": now_iso()}})
     if item.get("assigned_user_id"):
         await create_notification(item["assigned_user_id"], sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
+        # Email the assignee
+        assignee = await db.users.find_one({"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0})
+        if assignee:
+            asyncio.create_task(send_nudge(assignee, item, user, body.note or ""))
     else:
         await notify_role(item.get("reviewer_role", ""), sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
