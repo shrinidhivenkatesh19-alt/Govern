@@ -1,6 +1,6 @@
 {
-  "buildCommand": "npm install --legacy-peer-deps --prefix frontend && npm run build --prefix frontend",
-  "outputDirectory": "frontend/build",
+  "buildCommand": "npm install --legacy-peer-deps && npm run build",
+  "outputDirectory": "build",
   "installCommand": "echo 'skip root install'",
   "framework": null,
   "rewrites": [
