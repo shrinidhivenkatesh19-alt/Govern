@@ -60,106 +60,133 @@ export default function Analytics() {
             </div>
 
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
-                <Panel title="Pipeline by status" subtitle="Where every submission currently sits">
-                    {byStatus.length === 0 ? (
-                        <Empty />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={260}>
-                            <BarChart data={byStatus} margin={{ top: 10, right: 10, left: 0, bottom: 30 }}>
-                                <CartesianGrid stroke="#E5E7EB" vertical={false} />
-                                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#4B5563" }} angle={-15} textAnchor="end" height={50} />
-                                <YAxis tick={{ fontSize: 11, fill: "#4B5563" }} allowDecimals={false} />
-                                <Tooltip cursor={{ fill: "#F3F4F6" }} contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
-                                <Bar dataKey="value">
-                                    {byStatus.map((e, i) => (
-                                        <Cell key={i} fill={e.color} />
-                                    ))}
-                                </Bar>
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </Panel>
-
-                <Panel title="Approval tier distribution" subtitle="How much routine vs. CEO-required volume">
-                    {byTier.length === 0 ? (
-                        <Empty />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={260}>
-                            <PieChart>
-                                <Pie data={byTier} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={{ fontSize: 11 }}>
-                                    {byTier.map((e, i) => (
-                                        <Cell key={i} fill={e.color} />
-                                    ))}
-                                </Pie>
-                                <Tooltip contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
-                            </PieChart>
-                        </ResponsiveContainer>
-                    )}
-                </Panel>
-
-                <Panel title="Avg hours per stage" subtitle="Where time disappears">
-                    {stageHours.length === 0 ? (
-                        <Empty msg="No completed transitions yet" />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={260}>
-                            <BarChart data={stageHours} layout="vertical" margin={{ top: 5, right: 20, left: 20, bottom: 5 }}>
-                                <CartesianGrid stroke="#E5E7EB" horizontal={false} />
-                                <XAxis type="number" tick={{ fontSize: 11, fill: "#4B5563" }} />
-                                <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#0A0A0A" }} width={110} />
-                                <Tooltip contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
-                                <Bar dataKey="hours" fill="#002FA7" />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </Panel>
-
-                <Panel title="Volume by content type" subtitle="What the team produces">
-                    {byType.length === 0 ? (
-                        <Empty />
-                    ) : (
-                        <ResponsiveContainer width="100%" height={260}>
-                            <BarChart data={byType} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
-                                <CartesianGrid stroke="#E5E7EB" vertical={false} />
-                                <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#4B5563" }} angle={-20} textAnchor="end" height={60} />
-                                <YAxis tick={{ fontSize: 11, fill: "#4B5563" }} allowDecimals={false} />
-                                <Tooltip cursor={{ fill: "#F3F4F6" }} contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
-                                <Bar dataKey="value" fill="#0A0A0A" />
-                            </BarChart>
-                        </ResponsiveContainer>
-                    )}
-                </Panel>
+                <PipelineStatusChart data={byStatus} />
+                <TierDistributionChart data={byTier} />
+                <StageHoursChart data={stageHours} />
+                <VolumeByTypeChart data={byType} />
             </div>
 
-            <div className="border border-border" data-testid="idle-list">
-                <div className="px-6 py-4 border-b border-border bg-[#F3F4F6]">
-                    <div className="label-overline">Most idle pieces</div>
-                    <h3 className="font-display text-xl font-bold tracking-tight mt-1">Sitting longest</h3>
-                </div>
-                {data.idle_breakdown.length === 0 ? (
-                    <Empty msg="Nothing idle right now." />
-                ) : (
-                    <table className="w-full text-sm">
-                        <thead>
-                            <tr className="border-b border-border">
-                                <th className="text-left px-6 py-3 label-overline">Title</th>
-                                <th className="text-left px-6 py-3 label-overline">Status</th>
-                                <th className="text-left px-6 py-3 label-overline">Reviewer Tier</th>
-                                <th className="text-left px-6 py-3 label-overline">Idle</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {data.idle_breakdown.map((it) => (
-                                <tr key={it.id} className="border-b border-border last:border-b-0">
-                                    <td className="px-6 py-3">{it.title}</td>
-                                    <td className="px-6 py-3 text-xs uppercase tracking-wider">{it.status.replace(/_/g, " ")}</td>
-                                    <td className="px-6 py-3 text-xs uppercase tracking-wider">{(it.reviewer_role || "—").replace(/_/g, " ")}</td>
-                                    <td className="px-6 py-3 font-mono text-xs text-[#FF2400]">{it.idle_hours}h</td>
-                                </tr>
+            <IdleBreakdownTable items={data.idle_breakdown} />
+        </div>
+    );
+}
+
+function PipelineStatusChart({ data }) {
+    return (
+        <Panel title="Pipeline by status" subtitle="Where every submission currently sits">
+            {data.length === 0 ? (
+                <Empty />
+            ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 30 }}>
+                        <CartesianGrid stroke="#E5E7EB" vertical={false} />
+                        <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#4B5563" }} angle={-15} textAnchor="end" height={50} />
+                        <YAxis tick={{ fontSize: 11, fill: "#4B5563" }} allowDecimals={false} />
+                        <Tooltip cursor={{ fill: "#F3F4F6" }} contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
+                        <Bar dataKey="value">
+                            {data.map((e) => (
+                                <Cell key={e.name} fill={e.color} />
                             ))}
-                        </tbody>
-                    </table>
-                )}
+                        </Bar>
+                    </BarChart>
+                </ResponsiveContainer>
+            )}
+        </Panel>
+    );
+}
+
+function TierDistributionChart({ data }) {
+    return (
+        <Panel title="Approval tier distribution" subtitle="How much routine vs. CEO-required volume">
+            {data.length === 0 ? (
+                <Empty />
+            ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                    <PieChart>
+                        <Pie data={data} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={90} label={{ fontSize: 11 }}>
+                            {data.map((e) => (
+                                <Cell key={e.name} fill={e.color} />
+                            ))}
+                        </Pie>
+                        <Tooltip contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
+                    </PieChart>
+                </ResponsiveContainer>
+            )}
+        </Panel>
+    );
+}
+
+function StageHoursChart({ data }) {
+    return (
+        <Panel title="Avg hours per stage" subtitle="Where time disappears">
+            {data.length === 0 ? (
+                <Empty msg="No completed transitions yet" />
+            ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={data} layout="vertical" margin={{ top: 5, right: 20, left: 20, bottom: 5 }}>
+                        <CartesianGrid stroke="#E5E7EB" horizontal={false} />
+                        <XAxis type="number" tick={{ fontSize: 11, fill: "#4B5563" }} />
+                        <YAxis type="category" dataKey="name" tick={{ fontSize: 11, fill: "#0A0A0A" }} width={110} />
+                        <Tooltip contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
+                        <Bar dataKey="hours" fill="#002FA7" />
+                    </BarChart>
+                </ResponsiveContainer>
+            )}
+        </Panel>
+    );
+}
+
+function VolumeByTypeChart({ data }) {
+    return (
+        <Panel title="Volume by content type" subtitle="What the team produces">
+            {data.length === 0 ? (
+                <Empty />
+            ) : (
+                <ResponsiveContainer width="100%" height={260}>
+                    <BarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 40 }}>
+                        <CartesianGrid stroke="#E5E7EB" vertical={false} />
+                        <XAxis dataKey="name" tick={{ fontSize: 10, fill: "#4B5563" }} angle={-20} textAnchor="end" height={60} />
+                        <YAxis tick={{ fontSize: 11, fill: "#4B5563" }} allowDecimals={false} />
+                        <Tooltip cursor={{ fill: "#F3F4F6" }} contentStyle={{ borderRadius: 0, border: "1px solid #E5E7EB" }} />
+                        <Bar dataKey="value" fill="#0A0A0A" />
+                    </BarChart>
+                </ResponsiveContainer>
+            )}
+        </Panel>
+    );
+}
+
+function IdleBreakdownTable({ items }) {
+    return (
+        <div className="border border-border" data-testid="idle-list">
+            <div className="px-6 py-4 border-b border-border bg-[#F3F4F6]">
+                <div className="label-overline">Most idle pieces</div>
+                <h3 className="font-display text-xl font-bold tracking-tight mt-1">Sitting longest</h3>
             </div>
+            {items.length === 0 ? (
+                <Empty msg="Nothing idle right now." />
+            ) : (
+                <table className="w-full text-sm">
+                    <thead>
+                        <tr className="border-b border-border">
+                            <th className="text-left px-6 py-3 label-overline">Title</th>
+                            <th className="text-left px-6 py-3 label-overline">Status</th>
+                            <th className="text-left px-6 py-3 label-overline">Reviewer Tier</th>
+                            <th className="text-left px-6 py-3 label-overline">Idle</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {items.map((it) => (
+                            <tr key={it.id} className="border-b border-border last:border-b-0">
+                                <td className="px-6 py-3">{it.title}</td>
+                                <td className="px-6 py-3 text-xs uppercase tracking-wider">{it.status.replace(/_/g, " ")}</td>
+                                <td className="px-6 py-3 text-xs uppercase tracking-wider">{(it.reviewer_role || "—").replace(/_/g, " ")}</td>
+                                <td className="px-6 py-3 font-mono text-xs text-[#FF2400]">{it.idle_hours}h</td>
+                            </tr>
+                        ))}
+                    </tbody>
+                </table>
+            )}
         </div>
     );
 }

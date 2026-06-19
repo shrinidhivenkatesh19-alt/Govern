@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -45,16 +45,16 @@ export default function Overview() {
     const [bulkNudging, setBulkNudging] = useState(false);
     const [rowNudging, setRowNudging] = useState({});
 
-    const load = async () => {
+    const load = useCallback(async () => {
         const [a, s] = await Promise.all([api.get("/dashboard/stats"), api.get("/submissions")]);
         setStats(a.data);
         setItems(s.data);
         setLoading(false);
-    };
+    }, []);
 
     useEffect(() => {
         load();
-    }, []);
+    }, [load]);
 
     const nudges = items.filter((i) => i.needs_nudge && !i.needs_escalation);
     const escalations = items.filter((i) => i.needs_escalation);

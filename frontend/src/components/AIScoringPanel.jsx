@@ -120,8 +120,8 @@ export default function AIScoringPanel({ result, loading }) {
                     <div>
                         <div className="label-overline text-white/60 mb-2">Open Questions Before Submission</div>
                         <ul className="space-y-1 text-white/80 text-sm" data-testid="open-questions">
-                            {result.questions_to_resolve.map((q, i) => (
-                                <li key={i} className="flex gap-2">
+                            {result.questions_to_resolve.map((q) => (
+                                <li key={q} className="flex gap-2">
                                     <span className="text-[#FFD700]">›</span>
                                     {q}
                                 </li>

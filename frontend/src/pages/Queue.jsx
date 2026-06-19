@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Inbox, AlertTriangle, Clock } from "lucide-react";
@@ -43,17 +43,17 @@ export default function Queue() {
     const [filter, setFilter] = useState("all");
     const [loading, setLoading] = useState(true);
 
-    const load = async (f) => {
+    const load = useCallback(async (f) => {
         setLoading(true);
         const params = f && f !== "all" ? { status_filter: f } : {};
         const r = await api.get("/submissions", { params });
         setItems(r.data);
         setLoading(false);
-    };
+    }, []);
 
     useEffect(() => {
         load(filter);
-    }, [filter]);
+    }, [filter, load]);
 
     return (
         <div className="p-8 lg:p-10" data-testid="queue-page">

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -37,6 +37,9 @@ const statusLabels = {
     live: "Live",
 };
 
+const MS_PER_DAY = 86400000;
+const BYTES_PER_KB = 1024;
+
 const statusBg = {
     scored: "#F3F4F6",
     pending_acceptance: "#FFD700",
@@ -62,7 +65,7 @@ export default function SubmissionDetail() {
     const [forwardUserId, setForwardUserId] = useState("");
     const [forwardTimeline, setForwardTimeline] = useState(null);
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             const r = await api.get(`/submissions/${id}`);
             setItem(r.data);
@@ -72,11 +75,11 @@ export default function SubmissionDetail() {
         } finally {
             setLoading(false);
         }
-    };
+    }, [id, navigate]);
 
     useEffect(() => {
         load();
-    }, [id]);
+    }, [load]);
 
     const act = async (endpoint, payload = {}, requireNote = false) => {
         if (requireNote && !note.trim()) {
@@ -158,7 +161,7 @@ export default function SubmissionDetail() {
 
     const openForwardMode = () => {
         const today = new Date();
-        const plus = (d) => new Date(today.getTime() + d * 86400000).toISOString().split("T")[0];
+        const plus = (d) => new Date(today.getTime() + d * MS_PER_DAY).toISOString().split("T")[0];
         setForwardTimeline({
             accept_by: plus(2),
             review_by: plus(5),
@@ -288,11 +291,11 @@ export default function SubmissionDetail() {
                                                     {a.original_filename}
                                                 </a>
                                                 <div className="text-xs text-muted-foreground font-mono">
-                                                    {a.size < 1024
+                                                    {a.size < BYTES_PER_KB
                                                         ? `${a.size} B`
-                                                        : a.size < 1024 * 1024
-                                                        ? `${Math.round(a.size / 1024)} KB`
-                                                        : `${(a.size / 1024 / 1024).toFixed(1)} MB`}
+                                                        : a.size < BYTES_PER_KB * BYTES_PER_KB
+                                                        ? `${Math.round(a.size / BYTES_PER_KB)} KB`
+                                                        : `${(a.size / BYTES_PER_KB / BYTES_PER_KB).toFixed(1)} MB`}
                                                 </div>
                                             </div>
                                             <a
@@ -314,7 +317,7 @@ export default function SubmissionDetail() {
                         <Section title={`Approval chain (${item.approval_chain.length})`}>
                             <ol className="space-y-3" data-testid="approval-chain">
                                 {item.approval_chain.map((step, i) => (
-                                    <li key={i} className="flex gap-3 items-start text-sm" data-testid={`chain-step-${i}`}>
+                                    <li key={step.ts + step.approver_id} className="flex gap-3 items-start text-sm" data-testid={`chain-step-${i}`}>
                                         <div className="w-7 h-7 bg-[#16A34A] text-white flex items-center justify-center font-display font-bold text-xs shrink-0">
                                             {i + 1}
                                         </div>
@@ -346,8 +349,8 @@ export default function SubmissionDetail() {
 
                     <Section title="Activity">
                         <ol className="space-y-4" data-testid="activity-timeline">
-                            {item.activity.map((a, i) => (
-                                <li key={i} className="flex gap-4 text-sm">
+                            {item.activity.map((a) => (
+                                <li key={a.ts + a.actor + a.action} className="flex gap-4 text-sm">
                                     <div
                                         className={`w-2 h-2 mt-1.5 rounded-full shrink-0 ${
                                             a.actor_role === "system" ? "bg-[#FFD700]" : "bg-[#0A0A0A]"

@@ -11,6 +11,7 @@ export function AuthProvider({ children }) {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
+        // NOTE: localStorage tokens are vulnerable to XSS. Migrate to httpOnly cookies when possible.
         const token = localStorage.getItem("caa_token");
         if (token && !user) {
             api.get("/auth/me")
@@ -23,7 +24,8 @@ export function AuthProvider({ children }) {
         } else {
             setLoading(false);
         }
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []); // intentionally runs once on mount to rehydrate from stored token
 
     const login = async (email, password) => {
         const r = await api.post("/auth/login", { email, password });

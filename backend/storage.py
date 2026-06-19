@@ -81,6 +81,7 @@ async def upload_file(file: UploadFile = File(...), user: dict = Depends(get_cur
     path = f"{APP_NAME}/uploads/{user['id']}/{file_id}.{ext}"
     content_type = file.content_type or MIME_TYPES.get(ext, "application/octet-stream")
 
+    result: dict = {}
     try:
         result = put_object(path, data, content_type)
     except requests.RequestException as e:
@@ -124,6 +125,8 @@ async def download_file(file_id: str, authorization: Optional[str] = Header(None
     record = await db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
+    data: bytes = b""
+    ct: str = "application/octet-stream"
     try:
         data, ct = get_object(record["storage_path"])
     except requests.RequestException as e:

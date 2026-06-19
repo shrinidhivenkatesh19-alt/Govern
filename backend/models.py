@@ -92,7 +92,7 @@ class SubmissionCreate(BaseModel):
     assigned_user_id: Optional[str] = None
 
     @model_validator(mode="after")
-    def _require_assignee_for_non_auto(self):
+    def _require_assignee_for_non_auto(self) -> "SubmissionCreate":
         if self.chosen_tier != "auto_approve" and not (self.assigned_user_id or "").strip():
             raise ValueError("assigned_user_id is required for non auto_approve tiers")
         return self

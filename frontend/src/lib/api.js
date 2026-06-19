@@ -5,6 +5,7 @@ export const API = `${BACKEND_URL}/api`;
 
 export const api = axios.create({ baseURL: API });
 
+// NOTE: localStorage tokens are vulnerable to XSS. Migrate to httpOnly cookies when possible.
 api.interceptors.request.use((config) => {
     const token = localStorage.getItem("caa_token");
     if (token) config.headers.Authorization = `Bearer ${token}`;

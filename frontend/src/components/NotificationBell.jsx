@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
 import { Bell, Check } from "lucide-react";
@@ -27,7 +27,7 @@ export default function NotificationBell() {
     const ref = useRef(null);
     const navigate = useNavigate();
 
-    const load = async () => {
+    const load = useCallback(async () => {
         try {
             const r = await api.get("/notifications");
             setItems(r.data.items);
@@ -35,13 +35,13 @@ export default function NotificationBell() {
         } catch {
             /* ignore */
         }
-    };
+    }, []);
 
     useEffect(() => {
         load();
         const i = setInterval(load, 30000);
         return () => clearInterval(i);
-    }, []);
+    }, [load]);
 
     useEffect(() => {
         const onClick = (e) => {
@@ -49,7 +49,7 @@ export default function NotificationBell() {
         };
         document.addEventListener("mousedown", onClick);
         return () => document.removeEventListener("mousedown", onClick);
-    }, []);
+    }, [setOpen]);
 
     const openItem = async (n) => {
         if (!n.read) {

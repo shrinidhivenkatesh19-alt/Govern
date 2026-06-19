@@ -34,7 +34,7 @@ api_router.include_router(scheduler_module.router)
 
 
 @api_router.get("/")
-async def root():
+async def root() -> dict[str, str]:
     return {"service": "Content Approval Agent", "status": "ok"}
 
 
@@ -50,7 +50,7 @@ app.add_middleware(
 
 
 @app.on_event("startup")
-async def on_startup():
+async def on_startup() -> None:
     try:
         init_storage()
         logger.info("Object storage initialized")
@@ -61,5 +61,5 @@ async def on_startup():
 
 
 @app.on_event("shutdown")
-async def shutdown_db_client():
+async def shutdown_db_client() -> None:
     client.close()

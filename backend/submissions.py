@@ -111,26 +111,19 @@ async def _transition(sub_id: str, new_status: str, actor: dict, action: str, no
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
 
 
-# ---------------- routes ----------------
-@router.post("/submissions")
-async def create_submission(body: SubmissionCreate, user: dict = Depends(get_current_user)):
-    sub_id = str(uuid.uuid4())
-    status_val = _initial_status_for_tier(body.chosen_tier)
-    suggested_role = _reviewer_role_for_tier(body.chosen_tier)
-    now = now_iso()
-
-    assignee = await db.users.find_one({"id": body.assigned_user_id}, {"_id": 0, "password_hash": 0})
-    if not assignee and status_val != "approved":
-        raise HTTPException(status_code=400, detail="Assigned user not found")
-
+def _build_creation_activity(user: dict, body, assignee: Optional[dict], status_val: str, now: str) -> list:
     activity = [{
         "ts": now, "actor": user["name"], "actor_role": user["role"], "action": "submitted",
         "note": f"Submitted as {body.chosen_tier}" + (f"; assigned to {assignee['name']}" if assignee else "; auto-approved"),
     }]
     if status_val == "approved":
         activity.append({"ts": now, "actor": "Agent", "actor_role": "system", "action": "auto_approved", "note": "Routine content, auto-approved by agent"})
+    return activity
 
-    doc = {
+
+def _build_submission_doc(sub_id: str, body, user: dict, assignee: Optional[dict], status_val: str, now: str, activity: list) -> dict:
+    suggested_role = _reviewer_role_for_tier(body.chosen_tier)
+    return {
         "id": sub_id,
         "title": body.title,
         "request_type": body.request_type,
@@ -161,6 +154,43 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
         "timeline_agreed": False,
         "approval_chain": [],
     }
+
+
+def _build_forward_set_fields(user: dict, target: dict, item: dict, body, chain: list, durations: dict) -> dict:
+    activity = item.get("activity", []) + [{
+        "ts": now_iso(), "actor": user["name"], "actor_role": user["role"],
+        "action": "approved_and_forwarded",
+        "note": f"Approved → forwarded to {target['name']}" + (f" · {body.note}" if body.note else ""),
+    }]
+    set_fields: dict = {
+        "approval_chain": chain,
+        "status": "pending_acceptance",
+        "reviewer_role": target["role"],
+        "assigned_user_id": target["id"], "assigned_user_name": target["name"],
+        "assigned_user_email": target.get("email"), "assigned_user_designation": target.get("designation", ""),
+        "assigned_user_team": target.get("team", ""),
+        "stage_entered_at": now_iso(), "stage_durations": durations,
+        "activity": activity, "timeline_agreed": False, "updated_at": now_iso(),
+        "auto_nudges_sent": {},
+    }
+    if body.timeline:
+        set_fields["timeline"] = body.timeline.model_dump()
+    return set_fields
+
+
+# ---------------- routes ----------------
+@router.post("/submissions")
+async def create_submission(body: SubmissionCreate, user: dict = Depends(get_current_user)):
+    sub_id = str(uuid.uuid4())
+    status_val = _initial_status_for_tier(body.chosen_tier)
+    now = now_iso()
+
+    assignee = await db.users.find_one({"id": body.assigned_user_id}, {"_id": 0, "password_hash": 0})
+    if not assignee and status_val != "approved":
+        raise HTTPException(status_code=400, detail="Assigned user not found")
+
+    activity = _build_creation_activity(user, body, assignee, status_val, now)
+    doc = _build_submission_doc(sub_id, body, user, assignee, status_val, now, activity)
     await db.submissions.insert_one(doc)
 
     if status_val == "pending_acceptance" and assignee:
@@ -169,7 +199,6 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
             f"New submission needs acceptance: {body.title}",
             f"From {user['name']} · accept by {body.timeline.accept_by}",
         )
-        # Email assignment
         asyncio.create_task(send_assignment(assignee, doc, user, body.timeline.accept_by))
 
     doc.pop("_id", None)
@@ -401,26 +430,7 @@ async def approve_and_forward(sub_id: str, body: ApproveForwardIn, user: dict = 
     durations = item.get("stage_durations", {}) or {}
     durations[item["status"]] = durations.get(item["status"], 0) + elapsed
 
-    activity = item.get("activity", []) + [{
-        "ts": now_iso(), "actor": user["name"], "actor_role": user["role"],
-        "action": "approved_and_forwarded",
-        "note": f"Approved → forwarded to {target['name']}" + (f" · {body.note}" if body.note else ""),
-    }]
-
-    set_fields = {
-        "approval_chain": chain,
-        "status": "pending_acceptance",
-        "reviewer_role": target["role"],
-        "assigned_user_id": target["id"], "assigned_user_name": target["name"],
-        "assigned_user_email": target.get("email"), "assigned_user_designation": target.get("designation", ""),
-        "assigned_user_team": target.get("team", ""),
-        "stage_entered_at": now_iso(), "stage_durations": durations,
-        "activity": activity, "timeline_agreed": False, "updated_at": now_iso(),
-        "auto_nudges_sent": {},
-    }
-    if body.timeline:
-        set_fields["timeline"] = body.timeline.model_dump()
-
+    set_fields = _build_forward_set_fields(user, target, item, body, chain, durations)
     await db.submissions.update_one({"id": sub_id}, {"$set": set_fields})
     next_tl = set_fields.get("timeline") or item.get("timeline") or {}
     await create_notification(target["id"], sub_id, "assigned",

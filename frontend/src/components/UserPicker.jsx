@@ -26,7 +26,7 @@ export default function UserPicker({ value, onChange, currentUserId }) {
         api.get("/users")
             .then((r) => setUsers(r.data.filter((u) => eligibleRoles.includes(u.role) && u.id !== currentUserId)))
             .catch(() => setUsers([]));
-    }, [currentUserId]);
+    }, [currentUserId, setUsers]);
 
     useEffect(() => {
         const onClick = (e) => {
@@ -34,7 +34,7 @@ export default function UserPicker({ value, onChange, currentUserId }) {
         };
         document.addEventListener("mousedown", onClick);
         return () => document.removeEventListener("mousedown", onClick);
-    }, []);
+    }, [setOpen]);
 
     const selected = useMemo(() => users.find((u) => u.id === value) || null, [users, value]);
 

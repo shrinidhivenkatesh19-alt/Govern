@@ -9,6 +9,8 @@ import TimelineEditor from "@/components/TimelineEditor";
 import UserPicker from "@/components/UserPicker";
 import { Sparkles, Send, RotateCcw } from "lucide-react";
 
+const MS_PER_DAY = 86400000;
+
 const tiers = [
     { value: "auto_approve", label: "Auto-Approve", color: "#16A34A" },
     { value: "product_only", label: "Product Review", color: "#002FA7" },
@@ -31,12 +33,12 @@ export default function NewSubmission() {
         request_type: "",
         brief: "",
         content: "",
-        deadline: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0],
+        deadline: new Date(Date.now() + 14 * MS_PER_DAY).toISOString().split("T")[0],
     });
     const [timeline, setTimeline] = useState({
-        accept_by: new Date(Date.now() + 2 * 86400000).toISOString().split("T")[0],
-        review_by: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
-        approve_by: new Date(Date.now() + 12 * 86400000).toISOString().split("T")[0],
+        accept_by: new Date(Date.now() + 2 * MS_PER_DAY).toISOString().split("T")[0],
+        review_by: new Date(Date.now() + 7 * MS_PER_DAY).toISOString().split("T")[0],
+        approve_by: new Date(Date.now() + 12 * MS_PER_DAY).toISOString().split("T")[0],
     });
     const [attachments, setAttachments] = useState([]);
     const [assignedUserId, setAssignedUserId] = useState("");
@@ -100,11 +102,11 @@ export default function NewSubmission() {
     };
 
     const reset = () => {
-        setForm({ title: "", request_type: "", brief: "", content: "", deadline: new Date(Date.now() + 14 * 86400000).toISOString().split("T")[0] });
+        setForm({ title: "", request_type: "", brief: "", content: "", deadline: new Date(Date.now() + 14 * MS_PER_DAY).toISOString().split("T")[0] });
         setTimeline({
-            accept_by: new Date(Date.now() + 2 * 86400000).toISOString().split("T")[0],
-            review_by: new Date(Date.now() + 7 * 86400000).toISOString().split("T")[0],
-            approve_by: new Date(Date.now() + 12 * 86400000).toISOString().split("T")[0],
+            accept_by: new Date(Date.now() + 2 * MS_PER_DAY).toISOString().split("T")[0],
+            review_by: new Date(Date.now() + 7 * MS_PER_DAY).toISOString().split("T")[0],
+            approve_by: new Date(Date.now() + 12 * MS_PER_DAY).toISOString().split("T")[0],
         });
         setAttachments([]);
         setAssignedUserId("");
@@ -235,60 +237,73 @@ export default function NewSubmission() {
                     <AIScoringPanel result={result} loading={scoring} />
 
                     {result && (
-                        <div className="border border-border p-6" data-testid="tier-confirm-block">
-                            <div className="label-overline mb-2">Confirm or override</div>
-                            <h3 className="font-display font-bold text-lg mb-4 tracking-tight">Which tier should this enter?</h3>
-
-                            <div className="space-y-2 mb-5">
-                                {tiers.map((t) => {
-                                    const isRec = t.value === result.recommended_tier;
-                                    const isSel = chosenTier === t.value;
-                                    return (
-                                        <button
-                                            key={t.value}
-                                            onClick={() => setChosenTier(t.value)}
-                                            data-testid={`tier-option-${t.value}`}
-                                            className={`w-full text-left p-3 border-2 transition-colors ${
-                                                isSel ? "bg-[#F3F4F6]" : "border-border hover:bg-[#F3F4F6]"
-                                            }`}
-                                            style={{ borderColor: isSel ? t.color : undefined }}
-                                        >
-                                            <div className="flex items-center justify-between">
-                                                <div>
-                                                    <div className="font-medium text-sm" style={{ color: isSel ? t.color : undefined }}>
-                                                        {t.label}
-                                                    </div>
-                                                    {isRec && <div className="text-xs text-muted-foreground mt-0.5">Agent recommended</div>}
-                                                </div>
-                                                <span
-                                                    className="w-3 h-3 border-2"
-                                                    style={{ borderColor: t.color, background: isSel ? t.color : "transparent" }}
-                                                />
-                                            </div>
-                                        </button>
-                                    );
-                                })}
-                            </div>
-
-                            {chosenTier && chosenTier !== "auto_approve" && !assignedUserId && (
-                                <div className="mb-4 px-3 py-2 bg-[#FFD700] text-[#0A0A0A] text-xs">
-                                    Pick a reviewer in the brief panel before submitting.
-                                </div>
-                            )}
-
-                            <button
-                                onClick={submit}
-                                disabled={submitting || !chosenTier || (chosenTier !== "auto_approve" && !assignedUserId)}
-                                data-testid="submit-final-btn"
-                                className="w-full flex items-center justify-center gap-2 py-3 bg-[#002FA7] text-white hover:bg-[#0A0A0A] uppercase tracking-[0.18em] text-xs font-medium disabled:opacity-60"
-                            >
-                                <Send className="w-4 h-4" />
-                                {submitting ? "Submitting..." : "Enter approval chain"}
-                            </button>
-                        </div>
+                        <TierConfirmBlock
+                            result={result}
+                            chosenTier={chosenTier}
+                            setChosenTier={setChosenTier}
+                            assignedUserId={assignedUserId}
+                            submitting={submitting}
+                            onSubmit={submit}
+                        />
                     )}
                 </div>
             </div>
+        </div>
+    );
+}
+
+function TierConfirmBlock({ result, chosenTier, setChosenTier, assignedUserId, submitting, onSubmit }) {
+    return (
+        <div className="border border-border p-6" data-testid="tier-confirm-block">
+            <div className="label-overline mb-2">Confirm or override</div>
+            <h3 className="font-display font-bold text-lg mb-4 tracking-tight">Which tier should this enter?</h3>
+
+            <div className="space-y-2 mb-5">
+                {tiers.map((t) => {
+                    const isRec = t.value === result.recommended_tier;
+                    const isSel = chosenTier === t.value;
+                    return (
+                        <button
+                            key={t.value}
+                            onClick={() => setChosenTier(t.value)}
+                            data-testid={`tier-option-${t.value}`}
+                            className={`w-full text-left p-3 border-2 transition-colors ${
+                                isSel ? "bg-[#F3F4F6]" : "border-border hover:bg-[#F3F4F6]"
+                            }`}
+                            style={{ borderColor: isSel ? t.color : undefined }}
+                        >
+                            <div className="flex items-center justify-between">
+                                <div>
+                                    <div className="font-medium text-sm" style={{ color: isSel ? t.color : undefined }}>
+                                        {t.label}
+                                    </div>
+                                    {isRec && <div className="text-xs text-muted-foreground mt-0.5">Agent recommended</div>}
+                                </div>
+                                <span
+                                    className="w-3 h-3 border-2"
+                                    style={{ borderColor: t.color, background: isSel ? t.color : "transparent" }}
+                                />
+                            </div>
+                        </button>
+                    );
+                })}
+            </div>
+
+            {chosenTier && chosenTier !== "auto_approve" && !assignedUserId && (
+                <div className="mb-4 px-3 py-2 bg-[#FFD700] text-[#0A0A0A] text-xs">
+                    Pick a reviewer in the brief panel before submitting.
+                </div>
+            )}
+
+            <button
+                onClick={onSubmit}
+                disabled={submitting || !chosenTier || (chosenTier !== "auto_approve" && !assignedUserId)}
+                data-testid="submit-final-btn"
+                className="w-full flex items-center justify-center gap-2 py-3 bg-[#002FA7] text-white hover:bg-[#0A0A0A] uppercase tracking-[0.18em] text-xs font-medium disabled:opacity-60"
+            >
+                <Send className="w-4 h-4" />
+                {submitting ? "Submitting..." : "Enter approval chain"}
+            </button>
         </div>
     );
 }
