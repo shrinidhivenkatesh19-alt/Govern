@@ -11,15 +11,16 @@ from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 try:
     from motor.motor_asyncio import AsyncIOMotorClient
-    _use_mock = False
+    _motor_available = True
 except Exception:
-    _use_mock = True
+    _motor_available = False
 
-try:
-    import mongomock_motor
-    _use_mock = True
-except ImportError:
-    _use_mock = False
+_use_mock = not _motor_available
+if _use_mock:
+    try:
+        import mongomock_motor
+    except ImportError:
+        raise RuntimeError("motor is unavailable and mongomock_motor is not installed")
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -32,7 +33,7 @@ JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 EMERGENT_LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
 
 if _use_mock:
-    client = mongomock_motor.AsyncMongoMockClient()
+    client = mongomock_motor.AsyncMongoMockClient()  # local dev only, no persistence
 else:
     client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]

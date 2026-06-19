@@ -4,6 +4,12 @@
 .idea/
 .vscode/
 
+# Python cache
+__pycache__/
+*.pyc
+.venv/
+venv/
+
 # Dependencies
 node_modules/
 /node_modules
