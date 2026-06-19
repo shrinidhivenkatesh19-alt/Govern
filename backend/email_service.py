@@ -8,7 +8,7 @@ import resend
 from core import logger
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "onboarding@resend.dev")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "no-reply@yourdomain.com")
 APP_URL = os.environ.get("APP_URL", "")
 FROM = f"GOVERN Approval Agent <{SENDER_EMAIL}>"
 
