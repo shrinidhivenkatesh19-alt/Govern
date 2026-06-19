@@ -9,7 +9,17 @@ import jwt
 from dotenv import load_dotenv
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from motor.motor_asyncio import AsyncIOMotorClient
+try:
+    from motor.motor_asyncio import AsyncIOMotorClient
+    _use_mock = False
+except Exception:
+    _use_mock = True
+
+try:
+    import mongomock_motor
+    _use_mock = True
+except ImportError:
+    _use_mock = False
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -21,7 +31,10 @@ JWT_ALG = os.environ.get("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 EMERGENT_LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
 
-client = AsyncIOMotorClient(MONGO_URL)
+if _use_mock:
+    client = mongomock_motor.AsyncMongoMockClient()
+else:
+    client = AsyncIOMotorClient(MONGO_URL)
 db = client[DB_NAME]
 
 security = HTTPBearer()
