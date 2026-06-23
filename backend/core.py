@@ -1,5 +1,6 @@
 """Shared core: env, db client, JWT, auth dependency, helpers."""
 import os
+import certifi
 import logging
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
@@ -30,12 +31,12 @@ DB_NAME = os.environ["DB_NAME"]
 JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = os.environ.get("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
-EMERGENT_LLM_KEY = os.environ["EMERGENT_LLM_KEY"]
+GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 
 if _use_mock:
     client = mongomock_motor.AsyncMongoMockClient()  # local dev only, no persistence
 else:
-    client = AsyncIOMotorClient(MONGO_URL)
+    client = AsyncIOMotorClient(MONGO_URL, tlsCAFile=certifi.where())
 db = client[DB_NAME]
 
 security = HTTPBearer()

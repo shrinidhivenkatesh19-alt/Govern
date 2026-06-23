@@ -1,15 +1,18 @@
-"""Content scoring agent (Claude Sonnet 4.5 via emergentintegrations)."""
+"""Content scoring agent (Google Gemini, free tier, via the current google-genai SDK)."""
 import json
 import re
-import uuid
 
+from google import genai
+from google.genai import types
 from fastapi import APIRouter, HTTPException, Depends
-from emergentintegrations.llm.chat import LlmChat, UserMessage
 
-from core import EMERGENT_LLM_KEY, get_current_user, logger
+from core import GEMINI_API_KEY, get_current_user, logger
 from models import ScoreIn, ScoreResult
 
 router = APIRouter()
+
+_client = genai.Client(api_key=GEMINI_API_KEY)
+MODEL = "gemini-2.0-flash"
 
 SYSTEM_PROMPT = """You are a senior marketing governance agent. Evaluate marketing content briefs and return STRICT JSON only.
 
@@ -45,12 +48,6 @@ def extract_json(text: str) -> dict:
 
 @router.post("/score", response_model=ScoreResult)
 async def score_content(body: ScoreIn, user: dict = Depends(get_current_user)):
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"score-{uuid.uuid4()}",
-        system_message=SYSTEM_PROMPT,
-    ).with_model("anthropic", "claude-sonnet-4-5-20250929")
-
     user_text = f"""Title: {body.title}
 Request Type: {body.request_type}
 
@@ -62,10 +59,19 @@ Content:
 
 Return JSON with keys: brand_alignment_score, completeness_score, content_classification, risk_flags, overall_score, recommended_tier, reasoning, questions_to_resolve."""
 
-    response = await chat.send_message(UserMessage(text=user_text))
+    try:
+        response = await _client.aio.models.generate_content(
+            model=MODEL,
+            contents=user_text,
+            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+        )
+        raw_text = response.text
+    except Exception as e:
+        logger.error(f"Gemini call failed: {e}")
+        raise HTTPException(status_code=502, detail=f"Scoring request failed: {e}")
 
     try:
-        data = extract_json(response if isinstance(response, str) else str(response))
+        data = extract_json(raw_text)
         data["brand_alignment_score"] = int(data.get("brand_alignment_score", 0))
         data["completeness_score"] = int(data.get("completeness_score", 0))
         data["overall_score"] = int(data.get("overall_score", 0))
@@ -73,5 +79,5 @@ Return JSON with keys: brand_alignment_score, completeness_score, content_classi
         data["questions_to_resolve"] = list(data.get("questions_to_resolve", []) or [])
         return ScoreResult(**data)
     except Exception as e:
-        logger.error(f"Score parse failed: {e}; raw={response}")
+        logger.error(f"Score parse failed: {e}; raw={raw_text}")
         raise HTTPException(status_code=502, detail=f"Scoring failed: {e}")

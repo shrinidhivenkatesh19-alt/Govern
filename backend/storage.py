@@ -1,19 +1,19 @@
-"""Object storage helpers + file upload/download router."""
+"""Object storage helpers + file upload/download router (MongoDB GridFS — no external storage account needed)."""
 import uuid
 from typing import Optional
 
 import jwt
-import requests
+from bson import ObjectId
+from gridfs.errors import NoFile
+from motor.motor_asyncio import AsyncIOMotorGridFSBucket
 from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Header, Query, Response
 
-from core import db, now_iso, get_current_user, EMERGENT_LLM_KEY, JWT_SECRET, JWT_ALG, logger
+from core import db, now_iso, get_current_user, JWT_SECRET, JWT_ALG, logger
 
 router = APIRouter()
-
-STORAGE_URL = "https://integrations.emergentagent.com/objstore/api/v1/storage"
-APP_NAME = "govern-approval"
-_storage_key: Optional[str] = None
-
+def init_storage():
+    """No-op: GridFS needs no setup step, connects lazily via get_bucket()."""
+    pass
 MIME_TYPES = {
     "pdf": "application/pdf",
     "ppt": "application/vnd.ms-powerpoint",
@@ -32,36 +32,16 @@ MIME_TYPES = {
     "md": "text/markdown",
 }
 ALLOWED_EXT = set(MIME_TYPES.keys())
-MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+MAX_UPLOAD_BYTES = 8 * 1024 * 1024  # kept smaller than before — free Atlas tier is 512MB total
+
+_bucket = None
 
 
-def init_storage() -> str:
-    global _storage_key
-    if _storage_key:
-        return _storage_key
-    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_LLM_KEY}, timeout=30)
-    resp.raise_for_status()
-    _storage_key = resp.json()["storage_key"]
-    return _storage_key
-
-
-def put_object(path: str, data: bytes, content_type: str) -> dict:
-    key = init_storage()
-    resp = requests.put(
-        f"{STORAGE_URL}/objects/{path}",
-        headers={"X-Storage-Key": key, "Content-Type": content_type},
-        data=data,
-        timeout=120,
-    )
-    resp.raise_for_status()
-    return resp.json()
-
-
-def get_object(path: str) -> tuple:
-    key = init_storage()
-    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
-    resp.raise_for_status()
-    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+def get_bucket() -> AsyncIOMotorGridFSBucket:
+    global _bucket
+    if _bucket is None:
+        _bucket = AsyncIOMotorGridFSBucket(db, bucket_name="uploads")
+    return _bucket
 
 
 @router.post("/upload")
@@ -78,22 +58,25 @@ async def upload_file(file: UploadFile = File(...), user: dict = Depends(get_cur
         raise HTTPException(status_code=400, detail="Empty file")
 
     file_id = str(uuid.uuid4())
-    path = f"{APP_NAME}/uploads/{user['id']}/{file_id}.{ext}"
     content_type = file.content_type or MIME_TYPES.get(ext, "application/octet-stream")
+    bucket = get_bucket()
 
-    result: dict = {}
     try:
-        result = put_object(path, data, content_type)
-    except requests.RequestException as e:
-        logger.error(f"Storage upload failed: {e}")
+        grid_id = await bucket.upload_from_stream(
+            filename,
+            data,
+            metadata={"content_type": content_type, "uploader_id": user["id"], "file_id": file_id},
+        )
+    except Exception as e:
+        logger.error(f"GridFS upload failed: {e}")
         raise HTTPException(status_code=502, detail="File storage upload failed")
 
     doc = {
         "id": file_id,
-        "storage_path": result["path"],
+        "grid_id": str(grid_id),
         "original_filename": filename,
         "content_type": content_type,
-        "size": result.get("size", len(data)),
+        "size": len(data),
         "uploader_id": user["id"],
         "is_deleted": False,
         "created_at": now_iso(),
@@ -104,7 +87,6 @@ async def upload_file(file: UploadFile = File(...), user: dict = Depends(get_cur
         "original_filename": filename,
         "content_type": content_type,
         "size": doc["size"],
-        "storage_path": result["path"],
     }
 
 
@@ -125,17 +107,20 @@ async def download_file(file_id: str, authorization: Optional[str] = Header(None
     record = await db.files.find_one({"id": file_id, "is_deleted": False}, {"_id": 0})
     if not record:
         raise HTTPException(status_code=404, detail="File not found")
-    data: bytes = b""
-    ct: str = "application/octet-stream"
+
+    bucket = get_bucket()
     try:
-        data, ct = get_object(record["storage_path"])
-    except requests.RequestException as e:
-        logger.error(f"Storage download failed: {e}")
+        stream = await bucket.open_download_stream(ObjectId(record["grid_id"]))
+        data = await stream.read()
+    except NoFile:
+        raise HTTPException(status_code=404, detail="File content missing")
+    except Exception as e:
+        logger.error(f"GridFS download failed: {e}")
         raise HTTPException(status_code=502, detail="File download failed")
 
     return Response(
         content=data,
-        media_type=record.get("content_type", ct),
+        media_type=record.get("content_type", "application/octet-stream"),
         headers={
             "Content-Disposition": f'inline; filename="{record["original_filename"]}"',
             "Cache-Control": "private, max-age=3600",
