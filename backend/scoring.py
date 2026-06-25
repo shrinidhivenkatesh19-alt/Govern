@@ -1,18 +1,17 @@
-"""Content scoring agent (Google Gemini, free tier, via the current google-genai SDK)."""
+"""Content scoring agent (Groq, free tier, OpenAI-compatible API)."""
 import json
 import re
 
-from google import genai
-from google.genai import types
+from openai import AsyncOpenAI
 from fastapi import APIRouter, HTTPException, Depends
 
-from core import GEMINI_API_KEY, get_current_user, logger
+from core import GROQ_API_KEY, get_current_user, logger
 from models import ScoreIn, ScoreResult
 
 router = APIRouter()
 
-_client = genai.Client(api_key=GEMINI_API_KEY)
-MODEL = "gemini-2.0-flash"
+_client = AsyncOpenAI(api_key=GROQ_API_KEY, base_url="https://api.groq.com/openai/v1")
+MODEL = "llama-3.3-70b-versatile"
 
 SYSTEM_PROMPT = """You are a senior marketing governance agent. Evaluate marketing content briefs and return STRICT JSON only.
 
@@ -60,14 +59,17 @@ Content:
 Return JSON with keys: brand_alignment_score, completeness_score, content_classification, risk_flags, overall_score, recommended_tier, reasoning, questions_to_resolve."""
 
     try:
-        response = await _client.aio.models.generate_content(
+        response = await _client.chat.completions.create(
             model=MODEL,
-            contents=user_text,
-            config=types.GenerateContentConfig(system_instruction=SYSTEM_PROMPT),
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": user_text},
+            ],
+            response_format={"type": "json_object"},
         )
-        raw_text = response.text
+        raw_text = response.choices[0].message.content
     except Exception as e:
-        logger.error(f"Gemini call failed: {e}")
+        logger.error(f"Groq call failed: {e}")
         raise HTTPException(status_code=502, detail=f"Scoring request failed: {e}")
 
     try:

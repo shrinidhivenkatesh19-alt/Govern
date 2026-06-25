@@ -11,9 +11,11 @@ from fastapi import APIRouter, HTTPException, Depends, UploadFile, File, Header,
 from core import db, now_iso, get_current_user, JWT_SECRET, JWT_ALG, logger
 
 router = APIRouter()
+
 def init_storage():
     """No-op: GridFS needs no setup step, connects lazily via get_bucket()."""
     pass
+
 MIME_TYPES = {
     "pdf": "application/pdf",
     "ppt": "application/vnd.ms-powerpoint",
