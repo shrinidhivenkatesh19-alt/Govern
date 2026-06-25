@@ -18,6 +18,7 @@ import notifications as notifications_module
 import submissions as submissions_module
 import analytics as analytics_module
 import scheduler as scheduler_module
+from stats import router as stats_router
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
@@ -31,7 +32,7 @@ api_router.include_router(notifications_module.router)
 api_router.include_router(submissions_module.router)
 api_router.include_router(analytics_module.router)
 api_router.include_router(scheduler_module.router)
-
+api_router.include_router(stats_router)  # ← stats routes under /api like everything else
 
 @api_router.get("/")
 async def root() -> dict[str, str]:
