@@ -9,7 +9,7 @@ motor==3.7.1
 pymongo==4.9.2
 dnspython==2.8.0
 
-openai==1.99.9
+google-genai==2.8.0
 
 python-dotenv==1.2.2
 python-multipart==0.0.32
