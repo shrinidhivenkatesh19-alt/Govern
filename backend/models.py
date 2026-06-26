@@ -69,7 +69,7 @@ class Attachment(BaseModel):
     original_filename: str
     content_type: str
     size: int
-    storage_path: str
+    storage_path: Optional[str] = ""  # legacy field; downloads use files collection + GridFS by id
 
 
 # -------- Submissions --------

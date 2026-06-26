@@ -11,21 +11,34 @@ export function AuthProvider({ children }) {
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // NOTE: localStorage tokens are vulnerable to XSS. Migrate to httpOnly cookies when possible.
+        const onLogout = () => setUser(null);
+        window.addEventListener("auth:logout", onLogout);
+        return () => window.removeEventListener("auth:logout", onLogout);
+    }, []);
+
+    useEffect(() => {
         const token = localStorage.getItem("caa_token");
-        if (token && !user) {
-            api.get("/auth/me")
-                .then((r) => {
-                    setUser(r.data);
-                    localStorage.setItem("caa_user", JSON.stringify(r.data));
-                })
-                .catch(() => {})
-                .finally(() => setLoading(false));
-        } else {
+        if (!token) {
+            if (user) {
+                setUser(null);
+                localStorage.removeItem("caa_user");
+            }
             setLoading(false);
+            return;
         }
+        api.get("/auth/me")
+            .then((r) => {
+                setUser(r.data);
+                localStorage.setItem("caa_user", JSON.stringify(r.data));
+            })
+            .catch(() => {
+                localStorage.removeItem("caa_token");
+                localStorage.removeItem("caa_user");
+                setUser(null);
+            })
+            .finally(() => setLoading(false));
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // intentionally runs once on mount to rehydrate from stored token
+    }, []); // validate stored token once on mount
 
     const login = async (email, password) => {
         const r = await api.post("/auth/login", { email, password });

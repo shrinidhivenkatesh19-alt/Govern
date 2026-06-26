@@ -14,14 +14,27 @@ FROM = f"GOVERN Approval Agent <{SENDER_EMAIL}>"
 
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
+else:
+    logger.warning("RESEND_API_KEY is not set — transactional emails will be skipped")
+
+if SENDER_EMAIL == "no-reply@yourdomain.com":
+    logger.warning("SENDER_EMAIL is still the placeholder — set a verified Resend domain address")
+
+if not APP_URL:
+    logger.warning("APP_URL is not set — email action links will point to '#'")
+
+
+def email_configured() -> bool:
+    return bool(RESEND_API_KEY and SENDER_EMAIL and SENDER_EMAIL != "no-reply@yourdomain.com")
 
 
 async def _send(to_email: str, subject: str, html: str) -> Optional[str]:
-    """Fire-and-forget email send. Never raises — failures logged only."""
+    """Send email via Resend. Never raises — failures logged only."""
     if not RESEND_API_KEY:
-        logger.warning("RESEND_API_KEY not set — skipping email")
+        logger.warning(f"RESEND_API_KEY not set — skipping email to {to_email}: {subject}")
         return None
     if not to_email:
+        logger.warning(f"No recipient email — skipping: {subject}")
         return None
     params = {"from": FROM, "to": [to_email], "subject": subject, "html": html}
     try:

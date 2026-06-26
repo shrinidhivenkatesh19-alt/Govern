@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
-import { Inbox, AlertTriangle, Clock } from "lucide-react";
+import { toast } from "sonner";
+import { useLiveData } from "@/lib/useLiveData";
+import { Inbox, AlertTriangle, Clock, RefreshCw } from "lucide-react";
 
 const statusLabels = {
     scored: "Scored",
@@ -42,32 +44,63 @@ export default function Queue() {
     const [items, setItems] = useState([]);
     const [filter, setFilter] = useState("all");
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
 
     const load = useCallback(async (f) => {
         setLoading(true);
-        const params = f && f !== "all" ? { status_filter: f } : {};
-        const r = await api.get("/submissions", { params });
-        setItems(r.data);
-        setLoading(false);
+        try {
+            const params = f && f !== "all" ? { status_filter: f } : {};
+            const r = await api.get("/submissions", { params });
+            setItems(r.data);
+        } catch (err) {
+            toast.error(err?.response?.data?.detail || "Failed to load queue");
+            setItems([]);
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
+        }
     }, []);
 
-    useEffect(() => {
-        load(filter);
-    }, [filter, load]);
+    useLiveData(
+        () => {
+            setRefreshing(true);
+            return load(filter);
+        },
+        { activePath: "/app/queue", pollMs: 15000 },
+    );
 
     return (
         <div className="p-8 lg:p-10" data-testid="queue-page">
-            <div className="mb-8">
+            <div className="mb-8 flex items-start justify-between gap-4">
+                <div>
                 <div className="label-overline mb-2">Workflow tracker</div>
                 <h1 className="font-display text-4xl font-bold tracking-tight">Approval queue.</h1>
                 <p className="text-muted-foreground mt-2">Every piece in flight. Status, owner, idle time, deadline.</p>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setRefreshing(true);
+                        load(filter);
+                    }}
+                    disabled={refreshing}
+                    data-testid="queue-refresh-btn"
+                    className="inline-flex items-center gap-2 px-3 py-2 border border-border text-xs uppercase tracking-[0.18em] hover:bg-[#F3F4F6] disabled:opacity-60"
+                >
+                    <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                    Refresh
+                </button>
             </div>
 
             <div className="flex gap-2 mb-6" data-testid="queue-filters">
                 {filters.map((f) => (
                     <button
                         key={f.value}
-                        onClick={() => setFilter(f.value)}
+                        onClick={() => {
+                            setFilter(f.value);
+                            setRefreshing(true);
+                            load(f.value);
+                        }}
                         data-testid={`filter-${f.value}`}
                         className={`px-4 py-2 text-xs uppercase tracking-[0.18em] border transition-colors ${
                             filter === f.value

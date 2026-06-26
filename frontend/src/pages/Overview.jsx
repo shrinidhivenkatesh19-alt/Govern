@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
-import { AlertTriangle, Clock, ArrowRight, Activity, Bell, Loader2, GitBranch } from "lucide-react";
+import { useLiveData, notifyDataChanged } from "@/lib/useLiveData";
+import { AlertTriangle, Clock, ArrowRight, Activity, Bell, Loader2, GitBranch, RefreshCw } from "lucide-react";
 
 const statusLabels = {
     scored: "Scored",
@@ -45,16 +46,28 @@ export default function Overview() {
     const [bulkNudging, setBulkNudging] = useState(false);
     const [rowNudging, setRowNudging] = useState({});
 
+    const [refreshing, setRefreshing] = useState(false);
+
     const load = useCallback(async () => {
-        const [a, s] = await Promise.all([api.get("/dashboard/stats"), api.get("/submissions")]);
-        setStats(a.data);
-        setItems(s.data);
-        setLoading(false);
+        try {
+            const [a, s] = await Promise.all([api.get("/dashboard/stats"), api.get("/submissions")]);
+            setStats(a.data);
+            setItems(s.data);
+        } catch (err) {
+            toast.error(err?.response?.data?.detail || "Failed to load dashboard");
+        } finally {
+            setLoading(false);
+            setRefreshing(false);
+        }
     }, []);
 
-    useEffect(() => {
-        load();
-    }, [load]);
+    useLiveData(
+        () => {
+            setRefreshing(true);
+            return load();
+        },
+        { activePath: "/app", exact: true, pollMs: 15000 },
+    );
 
     const nudges = items.filter((i) => i.needs_nudge && !i.needs_escalation);
     const escalations = items.filter((i) => i.needs_escalation);
@@ -72,6 +85,7 @@ export default function Overview() {
             const failed = r.data.failed?.length || 0;
             if (failed === 0) toast.success(`Nudged ${ok} reviewer${ok === 1 ? "" : "s"}`);
             else toast.warning(`Nudged ${ok}, ${failed} skipped`);
+            notifyDataChanged();
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Bulk nudge failed");
@@ -85,6 +99,7 @@ export default function Overview() {
         try {
             await api.post(`/submissions/${id}/nudge`, { note: "Nudge from Control Room" });
             toast.success("Reviewer nudged");
+            notifyDataChanged();
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Nudge failed");
@@ -95,12 +110,27 @@ export default function Overview() {
 
     return (
         <div className="p-8 lg:p-10" data-testid="overview-page">
-            <div className="mb-10">
+            <div className="mb-10 flex items-start justify-between gap-4">
+                <div>
                 <div className="label-overline mb-2">Welcome back, {user?.name}</div>
                 <h1 className="font-display text-4xl lg:text-5xl font-bold tracking-tight">Control Room.</h1>
                 <p className="text-muted-foreground mt-2 max-w-2xl">
                     Live status of every piece of content in the approval chain. Routine routes itself. The CEO only sees what reaches the CEO desk.
                 </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={() => {
+                        setRefreshing(true);
+                        load();
+                    }}
+                    disabled={refreshing}
+                    data-testid="overview-refresh-btn"
+                    className="inline-flex items-center gap-2 px-3 py-2 border border-border text-xs uppercase tracking-[0.18em] hover:bg-[#F3F4F6] disabled:opacity-60"
+                >
+                    <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? "animate-spin" : ""}`} />
+                    Refresh
+                </button>
             </div>
 
             <div className="grid grid-cols-2 lg:grid-cols-4 border border-border mb-10">

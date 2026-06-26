@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { notifyDataChanged } from "@/lib/useLiveData";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import AIScoringPanel from "@/components/AIScoringPanel";
@@ -91,6 +92,7 @@ export default function SubmissionDetail() {
             await api.post(`/submissions/${id}/${endpoint}`, { note, ...payload });
             setNote("");
             toast.success("Action recorded");
+            notifyDataChanged();
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Action failed");
@@ -108,6 +110,7 @@ export default function SubmissionDetail() {
             setEditingTimeline(false);
             setProposedTimeline(null);
             setNote("");
+            notifyDataChanged();
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Proposal failed");
@@ -122,6 +125,7 @@ export default function SubmissionDetail() {
             await api.post(`/submissions/${id}/agree-timeline`, { note });
             toast.success("Timeline agreed");
             setNote("");
+            notifyDataChanged();
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Failed");
@@ -151,6 +155,7 @@ export default function SubmissionDetail() {
             setForwardUserId("");
             setForwardTimeline(null);
             setNote("");
+            notifyDataChanged();
             await load();
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Forward failed");

@@ -4,7 +4,7 @@ import { toast } from "sonner";
 import { Upload, X, FileText, Image as ImageIcon, FileType, Loader2 } from "lucide-react";
 
 const ACCEPT = ".pdf,.ppt,.pptx,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,.gif,.webp,.txt,.csv,.md";
-const MAX_MB = 25;
+const MAX_MB = 8; // must match backend storage.MAX_UPLOAD_BYTES
 
 function iconFor(filename) {
     const ext = filename.split(".").pop()?.toLowerCase();

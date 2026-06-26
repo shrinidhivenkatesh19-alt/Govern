@@ -1,12 +1,11 @@
 """Submissions router — create, list, get, transitions (accept/approve/forward/escalate/etc.)."""
-import asyncio
 from datetime import datetime, timezone
 from typing import Optional
 import uuid
 
 from fastapi import APIRouter, HTTPException, Depends
 
-from core import db, now_iso, get_current_user, DECISION_ALLOWED_FROM, MAX_CHAIN_DEPTH
+from core import db, now_iso, get_current_user, DECISION_ALLOWED_FROM, MAX_CHAIN_DEPTH, logger
 from models import (
     SubmissionCreate, AcceptIn, ActionIn, RevisionIn, EscalateIn,
     ApproveForwardIn, TimelineProposal, Tier, SubmissionStatus, BulkNudgeIn,
@@ -15,6 +14,14 @@ from notifications import create_notification, notify_role
 from email_service import send_assignment, send_nudge
 
 router = APIRouter()
+
+
+async def _send_email(coro) -> None:
+    """Await email delivery — required on serverless where fire-and-forget tasks are dropped."""
+    try:
+        await coro
+    except Exception as e:
+        logger.error(f"Email send failed: {e}")
 
 
 # ---------------- helpers ----------------
@@ -199,7 +206,7 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
             f"New submission needs acceptance: {body.title}",
             f"From {user['name']} · accept by {body.timeline.accept_by}",
         )
-        asyncio.create_task(send_assignment(assignee, doc, user, body.timeline.accept_by))
+        await _send_email(send_assignment(assignee, doc, user, body.timeline.accept_by))
 
     doc.pop("_id", None)
     return doc
@@ -359,7 +366,9 @@ async def forward_to_ceo(sub_id: str, body: EscalateIn, user: dict = Depends(get
     )
     await create_notification(target["id"], sub_id, "forwarded_to_ceo", f"Submission forwarded to you: {item['title']}", f"From VP {user['name']}")
     await create_notification(item["submitter_id"], sub_id, "forwarded_to_ceo", f"'{item['title']}' forwarded to CEO", f"VP {user['name']} forwarded to {target['name']}")
-    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+    updated = await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+    await _send_email(send_assignment(target, updated or item, user, (item.get("timeline") or {}).get("accept_by", "")))
+    return updated
 
 
 @router.post("/submissions/{sub_id}/approve")
@@ -436,13 +445,13 @@ async def approve_and_forward(sub_id: str, body: ApproveForwardIn, user: dict = 
     await create_notification(target["id"], sub_id, "assigned",
                               f"Forwarded for your review: {item['title']}",
                               f"From {user['name']} · accept by {next_tl.get('accept_by', 'TBD')}")
-    # Email the new assignee about the forwarded submission
-    asyncio.create_task(send_assignment(target, {**item, **set_fields}, user, next_tl.get("accept_by", "")))
     # Distinct notification kind for intermediate approvals
     await create_notification(item["submitter_id"], sub_id, "forwarded",
                               f"'{item['title']}' approved & forwarded by {user['name']}",
                               f"Next reviewer: {target['name']}" + (f" · {target.get('designation', '')}" if target.get('designation') else ""))
-    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+    updated = await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+    await _send_email(send_assignment(target, updated or {**item, **set_fields}, user, next_tl.get("accept_by", "")))
+    return updated
 
 
 @router.post("/submissions/{sub_id}/request-revision")
@@ -471,6 +480,8 @@ async def escalate(sub_id: str, body: EscalateIn, user: dict = Depends(get_curre
         raise HTTPException(status_code=403, detail="This role cannot escalate further (use forward-to-ceo if VP)")
     if item.get("assigned_user_id") and user["id"] != item["assigned_user_id"]:
         raise HTTPException(status_code=403, detail=f"Only {item.get('assigned_user_name')} can escalate this")
+    if item["status"] not in ("pending_acceptance", "in_progress", "under_review", "escalated"):
+        raise HTTPException(status_code=400, detail=f"Cannot escalate from status '{item['status']}'")
     new_role = next_role_map[user["role"]]
 
     if body.assigned_user_id:
@@ -555,7 +566,7 @@ async def bulk_nudge(body: BulkNudgeIn, user: dict = Depends(get_current_user)):
             # Email the assignee
             assignee = await db.users.find_one({"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0})
             if assignee:
-                asyncio.create_task(send_nudge(assignee, item, user, note_text))
+                await _send_email(send_nudge(assignee, item, user, note_text))
         else:
             await notify_role(
                 item.get("reviewer_role", ""), sid, "nudge_manual",
@@ -571,6 +582,8 @@ async def nudge(sub_id: str, body: ActionIn, user: dict = Depends(get_current_us
     item = await db.submissions.find_one({"id": sub_id})
     if not item:
         raise HTTPException(status_code=404, detail="Not found")
+    if item["status"] not in ("pending_acceptance", "in_progress", "under_review", "escalated"):
+        raise HTTPException(status_code=400, detail=f"Cannot nudge from status '{item['status']}'")
     activity = item.get("activity", []) + [{
         "ts": now_iso(), "actor": user["name"], "actor_role": user["role"],
         "action": "nudged", "note": body.note or "Reviewer nudged",
@@ -581,7 +594,7 @@ async def nudge(sub_id: str, body: ActionIn, user: dict = Depends(get_current_us
         # Email the assignee
         assignee = await db.users.find_one({"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0})
         if assignee:
-            asyncio.create_task(send_nudge(assignee, item, user, body.note or ""))
+            await _send_email(send_nudge(assignee, item, user, body.note or ""))
     else:
         await notify_role(item.get("reviewer_role", ""), sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})

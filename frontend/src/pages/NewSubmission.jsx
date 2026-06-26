@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { notifyDataChanged } from "@/lib/useLiveData";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import AIScoringPanel from "@/components/AIScoringPanel";
@@ -93,6 +94,7 @@ export default function NewSubmission() {
                 assigned_user_id: assignedUserId || user?.id, // auto_approve uses self placeholder
             });
             toast.success("Submission entered the chain");
+            notifyDataChanged();
             navigate(`/app/submission/${r.data.id}`);
         } catch (err) {
             toast.error(err?.response?.data?.detail || "Submission failed");
