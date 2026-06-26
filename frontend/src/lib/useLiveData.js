@@ -18,11 +18,11 @@ export function useLiveData(loadFn, { activePath, exact = true, pollMs = 15000, 
     const loadRef = useRef(loadFn);
     loadRef.current = loadFn;
 
-    const pathMatches = (pathname) => {
-        if (!activePath) return true;
-        if (exact) return pathname === activePath;
-        return pathname === activePath || pathname.startsWith(`${activePath}/`);
-    };
+    const pathMatches = useCallback((pathname) => {
+    if (!activePath) return true;
+    if (exact) return pathname === activePath;
+    return pathname === activePath || pathname.startsWith(`${activePath}/`);
+}, [activePath, exact]);
 
     const isActive = pathMatches(location.pathname);
 
@@ -58,5 +58,5 @@ export function useLiveData(loadFn, { activePath, exact = true, pollMs = 15000, 
             document.removeEventListener("visibilitychange", onVisible);
             if (interval) clearInterval(interval);
         };
-    }, [enabled, activePath, location.pathname, pollMs, runLoad]);
+}, [enabled, location.pathname, pollMs, runLoad, pathMatches]);
 }
