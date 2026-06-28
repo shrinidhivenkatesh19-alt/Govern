@@ -290,7 +290,7 @@ function KPI({ label, value, accent, testid }) {
     return (
         <div className="px-6 py-5 border-r border-b border-border last:border-r-0" data-testid={testid}>
             <div className="label-overline mb-2">{label}</div>
-            <div className="font-display text-4xl font-bold tracking-tight" style={{ color: accent || "#0A0A0A" }}>
+            <div className="font-display text-4xl font-bold tracking-tight" style={{ color: accent || "hsl(var(--foreground))" }}>
                 {value}
             </div>
         </div>
