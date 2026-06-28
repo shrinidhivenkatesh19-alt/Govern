@@ -48,7 +48,7 @@ export default function Shell() {
                 }`}
                 data-testid="sidebar"
             >
-                <div className={`border-b border-border flex items-center ${collapsed ? "justify-center py-4" : "justify-end px-4 py-4"}`}>
+                <div className={`border-b border-border flex items-center justify-start px-4 py-4`}>
                     <button
                         onClick={toggleSidebar}
                         data-testid="sidebar-toggle-btn"
