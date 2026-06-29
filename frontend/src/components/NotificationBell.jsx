@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { Bell, Check } from "lucide-react";
 
 const kindAccent = {
@@ -21,6 +22,7 @@ const kindAccent = {
 };
 
 export default function NotificationBell() {
+    const { authReady, user } = useAuth();
     const [open, setOpen] = useState(false);
     const [items, setItems] = useState([]);
     const [unread, setUnread] = useState(0);
@@ -38,10 +40,11 @@ export default function NotificationBell() {
     }, []);
 
     useEffect(() => {
+        if (!authReady || !user) return;
         load();
         const i = setInterval(load, 30000);
         return () => clearInterval(i);
-    }, [load]);
+    }, [authReady, user, load]);
 
     useEffect(() => {
         const onClick = (e) => {

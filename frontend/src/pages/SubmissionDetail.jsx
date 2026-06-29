@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useParams, useNavigate, Link } from "react-router-dom";
-import { api } from "@/lib/api";
+import { api, getBackendUrl } from "@/lib/api";
 import { notifyDataChanged } from "@/lib/useLiveData";
 import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
@@ -55,7 +55,7 @@ const statusBg = {
 export default function SubmissionDetail() {
     const { id } = useParams();
     const navigate = useNavigate();
-    const { user } = useAuth();
+    const { user, authReady } = useAuth();
     const [item, setItem] = useState(null);
     const [loading, setLoading] = useState(true);
     const [note, setNote] = useState("");
@@ -79,8 +79,8 @@ export default function SubmissionDetail() {
     }, [id, navigate]);
 
     useEffect(() => {
-        load();
-    }, [load]);
+        if (authReady && user) load();
+    }, [authReady, user, load]);
 
     const act = async (endpoint, payload = {}, requireNote = false) => {
         if (requireNote && !note.trim()) {
@@ -278,7 +278,7 @@ export default function SubmissionDetail() {
                                         ? FileType
                                         : FileText;
                                     const token = localStorage.getItem("caa_token");
-                                    const downloadUrl = `${process.env.REACT_APP_BACKEND_URL}/api/files/${a.id}/download?auth=${token}`;
+                                    const downloadUrl = `${getBackendUrl()}/api/files/${a.id}/download?auth=${token}`;
                                     return (
                                         <li
                                             key={a.id}

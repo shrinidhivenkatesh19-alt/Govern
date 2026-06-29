@@ -13,15 +13,15 @@ import SubmissionDetail from "@/pages/SubmissionDetail";
 import Analytics from "@/pages/Analytics";
 
 function Protected({ children }) {
-    const { user, loading } = useAuth();
-    if (loading) return <div className="p-10 text-sm text-muted-foreground">Loading...</div>;
+    const { user, authReady } = useAuth();
+    if (!authReady) return <div className="p-10 text-sm text-muted-foreground">Loading...</div>;
     if (!user) return <Navigate to="/login" replace />;
     return children;
 }
 
 function PublicOnly({ children }) {
-    const { user, loading } = useAuth();
-    if (loading) return <div className="p-10 text-sm text-muted-foreground">Loading...</div>;
+    const { user, authReady } = useAuth();
+    if (!authReady) return <div className="p-10 text-sm text-muted-foreground">Loading...</div>;
     if (user) return <Navigate to="/app" replace />;
     return children;
 }

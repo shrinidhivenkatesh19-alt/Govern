@@ -1,6 +1,7 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { toast } from "sonner";
 import { useLiveData } from "@/lib/useLiveData";
 import { Inbox, AlertTriangle, Clock, RefreshCw } from "lucide-react";
@@ -41,6 +42,7 @@ const filters = [
 ];
 
 export default function Queue() {
+    const { user, authReady } = useAuth();
     const [items, setItems] = useState([]);
     const [filter, setFilter] = useState("all");
     const [loading, setLoading] = useState(true);
@@ -66,7 +68,7 @@ export default function Queue() {
             setRefreshing(true);
             return load(filter);
         },
-        { activePath: "/app/queue", pollMs: 15000 },
+        { activePath: "/app/queue", pollMs: 15000, enabled: authReady && !!user },
     );
 
     return (

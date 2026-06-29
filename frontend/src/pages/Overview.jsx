@@ -39,7 +39,7 @@ const currentSlaTarget = (it) => {
 };
 
 export default function Overview() {
-    const { user } = useAuth();
+    const { user, authReady } = useAuth();
     const [stats, setStats] = useState(null);
     const [items, setItems] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -66,7 +66,7 @@ export default function Overview() {
             setRefreshing(true);
             return load();
         },
-        { activePath: "/app", exact: true, pollMs: 15000 },
+        { activePath: "/app", exact: true, pollMs: 15000, enabled: authReady && !!user },
     );
 
     const nudges = items.filter((i) => i.needs_nudge && !i.needs_escalation);

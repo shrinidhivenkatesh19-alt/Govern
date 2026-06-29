@@ -4,11 +4,8 @@ import { api } from "@/lib/api";
 const AuthCtx = createContext(null);
 
 export function AuthProvider({ children }) {
-    const [user, setUser] = useState(() => {
-        const u = localStorage.getItem("caa_user");
-        return u ? JSON.parse(u) : null;
-    });
-    const [loading, setLoading] = useState(true);
+    const [user, setUser] = useState(null);
+    const [authReady, setAuthReady] = useState(false);
 
     useEffect(() => {
         const onLogout = () => setUser(null);
@@ -19,13 +16,12 @@ export function AuthProvider({ children }) {
     useEffect(() => {
         const token = localStorage.getItem("caa_token");
         if (!token) {
-            if (user) {
-                setUser(null);
-                localStorage.removeItem("caa_user");
-            }
-            setLoading(false);
+            localStorage.removeItem("caa_user");
+            setUser(null);
+            setAuthReady(true);
             return;
         }
+
         api.get("/auth/me")
             .then((r) => {
                 setUser(r.data);
@@ -36,15 +32,15 @@ export function AuthProvider({ children }) {
                 localStorage.removeItem("caa_user");
                 setUser(null);
             })
-            .finally(() => setLoading(false));
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []); // validate stored token once on mount
+            .finally(() => setAuthReady(true));
+    }, []);
 
     const login = async (email, password) => {
         const r = await api.post("/auth/login", { email, password });
         localStorage.setItem("caa_token", r.data.token);
         localStorage.setItem("caa_user", JSON.stringify(r.data.user));
         setUser(r.data.user);
+        setAuthReady(true);
         return r.data.user;
     };
 
@@ -53,6 +49,7 @@ export function AuthProvider({ children }) {
         localStorage.setItem("caa_token", r.data.token);
         localStorage.setItem("caa_user", JSON.stringify(r.data.user));
         setUser(r.data.user);
+        setAuthReady(true);
         return r.data.user;
     };
 
@@ -60,9 +57,14 @@ export function AuthProvider({ children }) {
         localStorage.removeItem("caa_token");
         localStorage.removeItem("caa_user");
         setUser(null);
+        setAuthReady(true);
     };
 
-    return <AuthCtx.Provider value={{ user, loading, login, register, logout }}>{children}</AuthCtx.Provider>;
+    return (
+        <AuthCtx.Provider value={{ user, authReady, loading: !authReady, login, register, logout }}>
+            {children}
+        </AuthCtx.Provider>
+    );
 }
 
 export const useAuth = () => useContext(AuthCtx);

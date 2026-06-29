@@ -20,7 +20,7 @@ const statusColor = {
 };
 
 export default function Analytics() {
-    const { user } = useAuth();
+    const { user, authReady } = useAuth();
     const [data, setData] = useState(null);
     const [loadError, setLoadError] = useState(false);
     const [refreshing, setRefreshing] = useState(false);
@@ -46,7 +46,7 @@ export default function Analytics() {
             setRefreshing(true);
             return load();
         },
-        { activePath: "/app/analytics", pollMs: 30000, enabled: !!canView },
+        { activePath: "/app/analytics", pollMs: 30000, enabled: authReady && !!canView },
     );
 
     if (user && !["vp", "ceo"].includes(user.role)) {
