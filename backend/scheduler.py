@@ -7,19 +7,42 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 
 from core import db, now_iso, get_current_user, logger
-from notifications import create_notification, notify_role
+from notifications import create_notification
+from email_service import send_assignment, send_nudge
 from submissions import _pick_next_assignee
 
 router = APIRouter()
+
+AGENT_ACTOR = {"name": "GOVERN Agent", "designation": "Automated SLA", "role": "system"}
+
+
+async def _send_email(coro) -> None:
+    try:
+        await coro
+    except Exception as e:
+        logger.error(f"SLA email send failed: {e!r}")
+
+
+async def _resolve_assignee(item: dict):
+    if item.get("assigned_user_id"):
+        return await db.users.find_one(
+            {"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0}
+        )
+    role = item.get("reviewer_role")
+    if role:
+        return await _pick_next_assignee(item, role)
+    return None
 
 
 async def _fire_sla_notification(
     item: dict, sub_id: str, kind: str, msg: str, activity_additions: list
 ) -> None:
-    if item.get("assigned_user_id"):
-        await create_notification(item["assigned_user_id"], sub_id, kind, f"SLA breach: {item['title']}", msg)
+    assignee = await _resolve_assignee(item)
+    if assignee:
+        await create_notification(assignee["id"], sub_id, kind, f"SLA breach: {item['title']}", msg)
+        await _send_email(send_nudge(assignee, item, AGENT_ACTOR, msg))
     else:
-        await notify_role(item.get("reviewer_role", ""), sub_id, kind, f"SLA breach: {item['title']}", msg)
+        logger.warning(f"SLA nudge skipped — no assignee for submission {sub_id}")
     activity_additions.append({
         "ts": now_iso(), "actor": "Agent", "actor_role": "system",
         "action": kind, "note": msg,
@@ -75,6 +98,14 @@ async def _handle_hard_escalation(
             await create_notification(target["id"], sub_id, "auto_escalation",
                                       f"Auto-escalated to you: {item['title']}",
                                       f"Reached deadline threshold; previously with {current_role}")
+            submitter = await db.users.find_one(
+                {"id": item["submitter_id"]}, {"_id": 0, "password_hash": 0}
+            )
+            merged = {**item, **update_set, "id": sub_id}
+            tl = merged.get("timeline") or {}
+            await _send_email(send_assignment(
+                target, merged, submitter or {}, tl.get("accept_by", ""),
+            ))
         await db.submissions.update_one({"id": sub_id}, {"$set": update_set})
     else:
         activity_additions.append({

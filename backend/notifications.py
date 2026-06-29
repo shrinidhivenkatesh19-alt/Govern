@@ -32,6 +32,7 @@ async def create_notification(user_id: str, submission_id: str, kind: str, title
 
 async def notify_role(role: str, submission_id: str, kind: str, title: str, body: str,
                       exclude_user_id: Optional[str] = None):
+    """Broadcast in-app notification to every user with `role`. Avoid for nudges — use a single assignee instead."""
     users = await db.users.find({"role": role}).to_list(200)
     for u in users:
         if exclude_user_id and u["id"] == exclude_user_id:

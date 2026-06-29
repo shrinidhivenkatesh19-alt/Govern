@@ -31,19 +31,30 @@ def email_configured() -> bool:
 async def _send(to_email: str, subject: str, html: str) -> Optional[str]:
     """Send email via Resend. Never raises — failures logged only."""
     if not RESEND_API_KEY:
-        logger.warning(f"RESEND_API_KEY not set — skipping email to {to_email}: {subject}")
+        logger.warning(
+            f"RESEND_API_KEY not set — skipping email to {to_email!r} subject={subject!r}"
+        )
         return None
+    if SENDER_EMAIL == "no-reply@yourdomain.com":
+        logger.warning(
+            f"SENDER_EMAIL is still the placeholder — Resend may reject mail to {to_email!r}"
+        )
     if not to_email:
-        logger.warning(f"No recipient email — skipping: {subject}")
+        logger.warning(f"No recipient email — skipping subject={subject!r}")
         return None
     params = {"from": FROM, "to": [to_email], "subject": subject, "html": html}
+    logger.info(f"Resend attempt → to={to_email} from={FROM} subject={subject!r}")
     try:
         result = await asyncio.to_thread(resend.Emails.send, params)
-        eid = result.get("id") if isinstance(result, dict) else None
-        logger.info(f"Email sent → {to_email} subject='{subject}' id={eid}")
+        eid = None
+        if isinstance(result, dict):
+            eid = result.get("id")
+        elif result is not None and hasattr(result, "id"):
+            eid = getattr(result, "id", None)
+        logger.info(f"Resend success → to={to_email} id={eid}")
         return eid
     except Exception as e:
-        logger.error(f"Resend send failed → {to_email}: {e}")
+        logger.error(f"Resend send failed → to={to_email} subject={subject!r}: {e!r}")
         return None
 
 

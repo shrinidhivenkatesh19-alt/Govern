@@ -5,6 +5,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Depends
 
 from core import db, get_current_user
+from access_control import submission_visibility_query
 
 router = APIRouter()
 
@@ -78,8 +79,9 @@ def _calculate_avg_approval_hours(items: list[dict]) -> tuple[float, list[dict]]
 
 @router.get("/dashboard/stats")
 async def dashboard_stats(user: dict = Depends(get_current_user)) -> dict[str, Any]:
-    """Lightweight stats for the Overview page — available to all authenticated users."""
-    items = await db.submissions.find({}, {"_id": 0}).to_list(2000)
+    """Lightweight stats for the Overview page — scoped to submissions this user can see."""
+    query = submission_visibility_query(user)
+    items = await db.submissions.find(query, {"_id": 0}).to_list(2000)
     by_status: dict = {}
     completed = []
     for it in items:
@@ -106,7 +108,8 @@ async def dashboard_stats(user: dict = Depends(get_current_user)) -> dict[str, A
 async def analytics_overview(user: dict = Depends(get_current_user)) -> dict[str, Any]:
     if user["role"] not in ("vp", "ceo"):
         raise HTTPException(status_code=403, detail="Governance analytics restricted to VP and CEO roles")
-    items = await db.submissions.find({}, {"_id": 0}).to_list(2000)
+    query = submission_visibility_query(user)
+    items = await db.submissions.find(query, {"_id": 0}).to_list(2000)
     now = datetime.now(timezone.utc)
 
     by_status, by_tier, by_type, risk_flag_counts = _count_status_tier_type(items)

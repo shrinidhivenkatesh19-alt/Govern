@@ -10,7 +10,8 @@ from models import (
     SubmissionCreate, AcceptIn, ActionIn, RevisionIn, EscalateIn,
     ApproveForwardIn, TimelineProposal, Tier, SubmissionStatus, BulkNudgeIn,
 )
-from notifications import create_notification, notify_role
+from access_control import submission_visibility_query, can_view_submission
+from notifications import create_notification
 from email_service import send_assignment, send_nudge
 
 router = APIRouter()
@@ -21,7 +22,26 @@ async def _send_email(coro) -> None:
     try:
         await coro
     except Exception as e:
-        logger.error(f"Email send failed: {e}")
+        logger.error(f"Email send failed: {e!r}")
+
+
+async def _notify_and_email_nudge(item: dict, sub_id: str, from_user: dict, note: str) -> None:
+    """Notify exactly one assignee and send nudge email (never broadcast to whole role)."""
+    assignee = None
+    if item.get("assigned_user_id"):
+        assignee = await db.users.find_one(
+            {"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0}
+        )
+    if not assignee and item.get("reviewer_role"):
+        assignee = await _pick_next_assignee(item, item["reviewer_role"])
+    if not assignee:
+        logger.warning(f"No nudge recipient for submission {sub_id} (role={item.get('reviewer_role')})")
+        return
+    await create_notification(
+        assignee["id"], sub_id, "nudge_manual",
+        f"Nudged: {item['title']}", note,
+    )
+    await _send_email(send_nudge(assignee, item, from_user, note))
 
 
 # ---------------- helpers ----------------
@@ -206,6 +226,7 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
             f"New submission needs acceptance: {body.title}",
             f"From {user['name']} · accept by {body.timeline.accept_by}",
         )
+        logger.info(f"Sending assignment email to {assignee.get('email')} for new submission {sub_id}")
         await _send_email(send_assignment(assignee, doc, user, body.timeline.accept_by))
 
     doc.pop("_id", None)
@@ -214,9 +235,9 @@ async def create_submission(body: SubmissionCreate, user: dict = Depends(get_cur
 
 @router.get("/submissions")
 async def list_submissions(user: dict = Depends(get_current_user), status_filter: Optional[str] = None):
-    query = {}
+    query: dict = submission_visibility_query(user)
     if status_filter:
-        query["status"] = status_filter
+        query = {"$and": [query, {"status": status_filter}]}
     items = await db.submissions.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return [_annotate(it) for it in items]
 
@@ -226,6 +247,8 @@ async def get_submission(sub_id: str, user: dict = Depends(get_current_user)):
     item = await db.submissions.find_one({"id": sub_id}, {"_id": 0})
     if not item:
         raise HTTPException(status_code=404, detail="Submission not found")
+    if not can_view_submission(user, item):
+        raise HTTPException(status_code=403, detail="You do not have access to this submission")
     return _annotate(item)
 
 
@@ -511,7 +534,11 @@ async def escalate(sub_id: str, body: EscalateIn, user: dict = Depends(get_curre
     )
     await create_notification(target["id"], sub_id, "escalation", f"Escalated to you: {item['title']}", f"From {user['name']}")
     await create_notification(item["submitter_id"], sub_id, "escalation", f"'{item['title']}' escalated", f"{user['name']} → {target['name']}")
-    return await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+    updated = await db.submissions.find_one({"id": sub_id}, {"_id": 0})
+    submitter = await db.users.find_one({"id": item["submitter_id"]}, {"_id": 0, "password_hash": 0})
+    tl = (updated or item).get("timeline") or {}
+    await _send_email(send_assignment(target, updated or item, submitter or user, tl.get("accept_by", "")))
+    return updated
 
 
 @router.post("/submissions/{sub_id}/mark-live")
@@ -558,20 +585,7 @@ async def bulk_nudge(body: BulkNudgeIn, user: dict = Depends(get_current_user)):
             {"id": sid},
             {"$push": {"activity": activity_entry}, "$set": {"updated_at": now_iso()}},
         )
-        if item.get("assigned_user_id"):
-            await create_notification(
-                item["assigned_user_id"], sid, "nudge_manual",
-                f"Nudged: {item['title']}", note_text,
-            )
-            # Email the assignee
-            assignee = await db.users.find_one({"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0})
-            if assignee:
-                await _send_email(send_nudge(assignee, item, user, note_text))
-        else:
-            await notify_role(
-                item.get("reviewer_role", ""), sid, "nudge_manual",
-                f"Nudged: {item['title']}", note_text,
-            )
+        await _notify_and_email_nudge(item, sid, user, note_text)
         nudged_ids.append(sid)
 
     return {"nudged": len(nudged_ids), "nudged_ids": nudged_ids, "failed": failed}
@@ -589,12 +603,5 @@ async def nudge(sub_id: str, body: ActionIn, user: dict = Depends(get_current_us
         "action": "nudged", "note": body.note or "Reviewer nudged",
     }]
     await db.submissions.update_one({"id": sub_id}, {"$set": {"activity": activity, "updated_at": now_iso()}})
-    if item.get("assigned_user_id"):
-        await create_notification(item["assigned_user_id"], sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
-        # Email the assignee
-        assignee = await db.users.find_one({"id": item["assigned_user_id"]}, {"_id": 0, "password_hash": 0})
-        if assignee:
-            await _send_email(send_nudge(assignee, item, user, body.note or ""))
-    else:
-        await notify_role(item.get("reviewer_role", ""), sub_id, "nudge_manual", f"Nudged: {item['title']}", body.note or f"From {user['name']}")
+    await _notify_and_email_nudge(item, sub_id, user, body.note or f"From {user['name']}")
     return await db.submissions.find_one({"id": sub_id}, {"_id": 0})

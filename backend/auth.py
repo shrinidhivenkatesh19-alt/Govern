@@ -32,11 +32,16 @@ async def register(body: RegisterIn):
         "id": user_id, "email": body.email.lower(), "name": body.name,
         "role": body.role, "team": doc["team"], "designation": doc["designation"],
     }
-    # Onboarding email — await so serverless runtimes don't drop the task before send completes
+    # Introduction email — must await on serverless (background tasks are dropped after response)
+    logger.info(f"Sending onboarding email to {user_payload['email']}")
     try:
-        await send_onboarding(user_payload)
+        eid = await send_onboarding(user_payload)
+        if eid:
+            logger.info(f"Onboarding email sent id={eid}")
+        else:
+            logger.warning(f"Onboarding email not sent for {user_payload['email']} — check RESEND_API_KEY / SENDER_EMAIL")
     except Exception as e:
-        logger.error(f"Onboarding email failed: {e}")
+        logger.error(f"Onboarding email failed for {user_payload['email']}: {e!r}")
     return {"token": token, "user": user_payload}
 
 
