@@ -32,6 +32,7 @@ JWT_SECRET = os.environ["JWT_SECRET"]
 JWT_ALG = os.environ.get("JWT_ALGORITHM", "HS256")
 JWT_EXPIRE_DAYS = int(os.environ.get("JWT_EXPIRE_DAYS", "7"))
 GROQ_API_KEY = os.environ["GROQ_API_KEY"]
+TEAMS_WEBHOOK_URL = os.environ.get("TEAMS_WEBHOOK_URL")  # Slack webhook URL, despite the name
 
 if _use_mock:
     client = mongomock_motor.AsyncMongoMockClient()  # local dev only, no persistence

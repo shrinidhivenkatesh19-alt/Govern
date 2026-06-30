@@ -2,9 +2,10 @@
 import uuid
 from typing import Optional, get_args
 
+import httpx
 from fastapi import APIRouter, Depends
 
-from core import db, now_iso, get_current_user
+from core import db, now_iso, get_current_user, TEAMS_WEBHOOK_URL, logger
 from models import NotificationKind
 
 router = APIRouter()
@@ -12,10 +13,21 @@ router = APIRouter()
 _VALID_KINDS = set(get_args(NotificationKind))
 
 
+async def notify_teams(title: str, body: str):
+    """Posts a notification to a Slack channel via Incoming Webhook, if configured."""
+    if not TEAMS_WEBHOOK_URL:
+        return
+    payload = {"text": f"*{title}*\n{body}"}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.post(TEAMS_WEBHOOK_URL, json=payload)
+    except Exception as e:
+        logger.warning(f"Slack notification failed: {e}")
+
+
 async def create_notification(user_id: str, submission_id: str, kind: str, title: str, body: str):
     if kind not in _VALID_KINDS:
         # Soft-warn rather than crash — keeps behaviour permissive while flagging typos.
-        from core import logger
         logger.warning(f"Unknown notification kind '{kind}' — not in NotificationKind enum")
     doc = {
         "id": str(uuid.uuid4()),
@@ -28,6 +40,7 @@ async def create_notification(user_id: str, submission_id: str, kind: str, title
         "created_at": now_iso(),
     }
     await db.notifications.insert_one(doc)
+    await notify_teams(title, body)
 
 
 async def notify_role(role: str, submission_id: str, kind: str, title: str, body: str,
