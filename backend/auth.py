@@ -1,14 +1,28 @@
 """Auth router."""
 import uuid
 import os
+import jwt
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, HTTPException, Depends
+from pydantic import BaseModel, EmailStr
 
-from core import db, now_iso, hash_password, verify_password, make_token, get_current_user, logger
+from core import db, now_iso, hash_password, verify_password, make_token, get_current_user, logger, JWT_SECRET, JWT_ALG
 from models import RegisterIn, LoginIn
 from email_service import send_onboarding, send_password_reset
 
 router = APIRouter()
+
+APP_URL = os.environ.get("APP_URL", "")
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
 
 
 @router.post("/auth/register")
@@ -33,7 +47,6 @@ async def register(body: RegisterIn):
         "id": user_id, "email": body.email.lower(), "name": body.name,
         "role": body.role, "team": doc["team"], "designation": doc["designation"],
     }
-    # Introduction email — must await on serverless (background tasks are dropped after response)
     logger.info(f"Sending onboarding email to {user_payload['email']}")
     try:
         eid = await send_onboarding(user_payload)
@@ -60,23 +73,6 @@ async def login(body: LoginIn):
             "designation": user.get("designation", ""),
         },
     }
-
-import jwt
-from datetime import datetime, timezone, timedelta
-from pydantic import BaseModel, EmailStr
-
-from core import JWT_SECRET, JWT_ALG
-
-APP_URL = os.environ.get("APP_URL", "")
-
-
-class ForgotPasswordIn(BaseModel):
-    email: EmailStr
-
-
-class ResetPasswordIn(BaseModel):
-    token: str
-    new_password: str
 
 
 @router.post("/auth/forgot-password")
@@ -114,6 +110,7 @@ async def reset_password(body: ResetPasswordIn):
     if result.matched_count == 0:
         raise HTTPException(status_code=400, detail="User not found.")
     return {"message": "Password updated successfully."}
+
 
 @router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):
