@@ -1,11 +1,12 @@
 """Auth router."""
 import uuid
+import os
 
 from fastapi import APIRouter, HTTPException, Depends
 
 from core import db, now_iso, hash_password, verify_password, make_token, get_current_user, logger
 from models import RegisterIn, LoginIn
-from email_service import send_onboarding
+from email_service import send_onboarding, send_password_reset
 
 router = APIRouter()
 
@@ -60,6 +61,59 @@ async def login(body: LoginIn):
         },
     }
 
+import jwt
+from datetime import datetime, timezone, timedelta
+from pydantic import BaseModel, EmailStr
+
+from core import JWT_SECRET, JWT_ALG
+
+APP_URL = os.environ.get("APP_URL", "")
+
+
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    token: str
+    new_password: str
+
+
+@router.post("/auth/forgot-password")
+async def forgot_password(body: ForgotPasswordIn):
+    user = await db.users.find_one({"email": body.email.lower()})
+    if user:
+        reset_token = jwt.encode(
+            {
+                "sub": user["id"],
+                "purpose": "password_reset",
+                "exp": datetime.now(timezone.utc) + timedelta(minutes=30),
+            },
+            JWT_SECRET,
+            algorithm=JWT_ALG,
+        )
+        reset_url = f"{APP_URL}/reset-password?token={reset_token}" if APP_URL else "#"
+        try:
+            await send_password_reset(user, reset_url)
+        except Exception as e:
+            logger.warning(f"Failed to send reset email: {e}")
+    return {"message": "If that email exists, a reset link has been sent."}
+
+
+@router.post("/auth/reset-password")
+async def reset_password(body: ResetPasswordIn):
+    try:
+        payload = jwt.decode(body.token, JWT_SECRET, algorithms=[JWT_ALG])
+    except jwt.PyJWTError:
+        raise HTTPException(status_code=400, detail="Reset link is invalid or expired.")
+    if payload.get("purpose") != "password_reset":
+        raise HTTPException(status_code=400, detail="Invalid reset token.")
+    user_id = payload.get("sub")
+    new_hash = hash_password(body.new_password)
+    result = await db.users.update_one({"id": user_id}, {"$set": {"password_hash": new_hash}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=400, detail="User not found.")
+    return {"message": "Password updated successfully."}
 
 @router.get("/auth/me")
 async def me(user: dict = Depends(get_current_user)):

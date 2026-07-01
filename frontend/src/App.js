@@ -5,6 +5,8 @@ import { Toaster } from "@/components/ui/sonner";
 
 import Login from "@/pages/Login";
 import Register from "@/pages/Register";
+import ForgotPassword from "@/pages/ForgotPassword";
+import ResetPassword from "@/pages/ResetPassword";
 import Shell from "@/components/Shell";
 import Overview from "@/pages/Overview";
 import NewSubmission from "@/pages/NewSubmission";
@@ -48,6 +50,22 @@ export default function App() {
                             </PublicOnly>
                         }
                     />
+                    <Route
+    path="/forgot-password"
+    element={
+        <PublicOnly>
+            <ForgotPassword />
+        </PublicOnly>
+    }
+/>
+<Route
+    path="/reset-password"
+    element={
+        <PublicOnly>
+            <ResetPassword />
+        </PublicOnly>
+    }
+/>
                     <Route
                         path="/app"
                         element={

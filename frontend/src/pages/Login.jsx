@@ -78,14 +78,21 @@ export default function Login() {
 
                     <label className="block mb-6">
                         <span className="label-overline block mb-2">Password</span>
-                        <input
-                            type="password"
-                            required
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            data-testid="login-password-input"
-                            className="w-full px-4 py-3 border border-border bg-white focus:outline-none focus:ring-2 focus:ring-[#002FA7] focus:ring-offset-1"
-                        />
+    <input
+        type="password"
+        required
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+        data-testid="login-password-input"
+        className="w-full px-4 py-3 border border-border bg-white focus:outline-none focus:ring-2 focus:ring-[#002FA7] focus:ring-offset-1"
+    />
+    <Link
+        to="/forgot-password"
+        className="block text-right text-xs text-muted-foreground underline mt-2 hover:text-[#002FA7]"
+        data-testid="goto-forgot-password-link"
+    >
+        Forgot password?
+    </Link>
                     </label>
 
                     <button

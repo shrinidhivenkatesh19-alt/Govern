@@ -8,7 +8,7 @@ import resend
 from core import logger
 
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "no-reply@yourdomain.com")
+SENDER_EMAIL = os.environ.get("SENDER_EMAIL", "noreply@pixelcrowd.in")
 APP_URL = os.environ.get("APP_URL", "")
 FROM = f"GOVERN Approval Agent <{SENDER_EMAIL}>"
 
@@ -17,7 +17,7 @@ if RESEND_API_KEY:
 else:
     logger.warning("RESEND_API_KEY is not set — transactional emails will be skipped")
 
-if SENDER_EMAIL == "no-reply@yourdomain.com":
+if SENDER_EMAIL == "noreply@pixelcrowd.in":
     logger.warning("SENDER_EMAIL is still the placeholder — set a verified Resend domain address")
 
 if not APP_URL:
@@ -25,7 +25,7 @@ if not APP_URL:
 
 
 def email_configured() -> bool:
-    return bool(RESEND_API_KEY and SENDER_EMAIL and SENDER_EMAIL != "no-reply@yourdomain.com")
+    return bool(RESEND_API_KEY and SENDER_EMAIL and SENDER_EMAIL != "noreply@pixelcrowd.in")
 
 
 async def _send(to_email: str, subject: str, html: str) -> Optional[str]:
@@ -35,7 +35,7 @@ async def _send(to_email: str, subject: str, html: str) -> Optional[str]:
             f"RESEND_API_KEY not set — skipping email to {to_email!r} subject={subject!r}"
         )
         return None
-    if SENDER_EMAIL == "no-reply@yourdomain.com":
+    if SENDER_EMAIL == "noreply@pixelcrowd.in":
         logger.warning(
             f"SENDER_EMAIL is still the placeholder — Resend may reject mail to {to_email!r}"
         )
@@ -202,3 +202,22 @@ async def send_nudge(assignee: dict, submission: dict, from_user: dict, note: st
     """
     subject = f"Nudge: please review '{title}'"
     return await _send(assignee["email"], subject, _SHELL.format(body=body))
+
+# 4) Password reset
+async def send_password_reset(user: dict, reset_url: str) -> Optional[str]:
+    name = user.get("name", "there")
+
+    body = f"""
+      <div style="font-size:10px;letter-spacing:0.2em;text-transform:uppercase;color:#FF2400;margin-bottom:8px;">Password reset requested</div>
+      <h1 style="font-family:Outfit,Helvetica,Arial,sans-serif;font-size:24px;font-weight:700;letter-spacing:-0.02em;margin:0 0 16px;">
+        Reset your password
+      </h1>
+      <p style="font-size:14px;line-height:1.6;color:#374151;margin:0 0 24px;">
+        Hi {name}, we received a request to reset your GOVERN password. Click below to choose a new one. This link expires in 30 minutes.
+      </p>
+      {_btn("Reset password", reset_url)}
+      <p style="font-size:12px;color:#9ca3af;margin-top:24px;">
+        If you didn't request this, you can safely ignore this email — your password won't change.
+      </p>
+    """
+    return await _send(user["email"], "Reset your GOVERN password", _SHELL.format(body=body))
